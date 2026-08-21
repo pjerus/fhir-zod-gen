@@ -161,18 +161,90 @@ describe("emitDocument", () => {
     expect(warnings).toHaveLength(1);
   });
 
-  it("falls back to z.unknown() with a phase-3c TODO for a choice-type group marker, and skips its variants", () => {
-    const { source } = emitDocument(
-      schema({
-        deceased: el({ type: "unknown", choices: ["deceasedBoolean", "deceasedDateTime"], required: false }),
+  describe("choice types (value[x])", () => {
+    function deceasedGroup(required: boolean) {
+      return {
+        deceased: el({ type: "unknown", choices: ["deceasedBoolean", "deceasedDateTime"], required }),
         deceasedBoolean: el({ type: "boolean", choiceOf: "deceased", required: false }),
         deceasedDateTime: el({ type: "dateTime", choiceOf: "deceased", required: false }),
-      })
-    );
-    expect(source).toContain('"deceased": z.unknown()');
-    expect(source).toContain("TODO(phase 3c)");
-    expect(source).not.toContain('"deceasedBoolean"');
-    expect(source).not.toContain('"deceasedDateTime"');
+      };
+    }
+
+    it("flattens variants into independent optional fields with their real types, and never emits the group marker itself as a key", () => {
+      const { source } = emitDocument(schema(deceasedGroup(false)));
+      expect(source).toContain('"deceasedBoolean": z.boolean().optional()');
+      expect(source).toContain('"deceasedDateTime": z.string().optional()');
+      expect(source).not.toContain('"deceased":');
+      expect(source).not.toContain("z.unknown()");
+    });
+
+    it("emits an at-most-one .superRefine() for an optional choice group", () => {
+      const { source } = emitDocument(schema(deceasedGroup(false)));
+      expect(source).toContain(".superRefine((data, ctx) => {");
+      expect(source).toContain('const present = (["deceasedBoolean", "deceasedDateTime"] as const).filter((key) => data[key] !== undefined);');
+      expect(source).toContain("if (present.length > 1) {");
+      expect(source).toContain('code: "custom"');
+      expect(source).toContain('At most one of deceasedBoolean, deceasedDateTime may be set (choice type "deceased[x]")');
+      expect(source).toContain("path: present,");
+      // Not the required-group wording.
+      expect(source).not.toContain("Exactly one of");
+    });
+
+    it("emits an exactly-one .superRefine() for a required choice group, distinct wording for zero vs. multiple present", () => {
+      const { source } = emitDocument(schema(deceasedGroup(true)));
+      expect(source).toContain("if (present.length !== 1) {");
+      expect(source).toContain('Exactly one of deceasedBoolean, deceasedDateTime is required (choice type "deceased[x]"), but none were provided.');
+      expect(source).toContain("but multiple were provided: ${present.join(\", \")}.`,");
+      expect(source).toContain('path: present.length === 0 ? ["deceased"] : present,');
+      // Not the optional-group wording.
+      expect(source).not.toContain("At most one of");
+    });
+
+    it("a complex-typed variant (e.g. valueQuantity -> Quantity) keeps its real cross-file reference, not z.unknown()", () => {
+      const { source } = emitDocument(
+        schema({
+          value: el({ type: "unknown", choices: ["valueQuantity", "valueString"], required: false }),
+          valueQuantity: el({ type: "Quantity", isNamedType: true, choiceOf: "value", required: false }),
+          valueString: el({ type: "string", choiceOf: "value", required: false }),
+        })
+      );
+      expect(source).toContain('import { QuantitySchema } from "./Quantity.js";');
+      expect(source).toContain('"valueQuantity": QuantitySchema.optional()');
+      expect(source).not.toContain("z.unknown()");
+    });
+
+    it("handles a choice group nested inside a BackboneElement", () => {
+      const { source } = emitDocument(
+        schema({
+          component: el({
+            type: "BackboneElement",
+            array: true,
+            required: false,
+            elements: {
+              code: el({ type: "string", required: true }),
+              ...deceasedGroup(false),
+            },
+          }),
+        })
+      );
+      // The nested object gets its own superRefine, independent of the outer one.
+      expect(source).toMatch(/"component": z\.array\(z\.object\(\{[\s\S]*"deceasedBoolean"[\s\S]*\}\)\.superRefine/);
+      expect(source).toContain('At most one of deceasedBoolean, deceasedDateTime may be set (choice type "deceased[x]")');
+    });
+
+    it("multiple choice groups at the same level share one .superRefine() call, not one per group", () => {
+      const { source } = emitDocument(
+        schema({
+          ...deceasedGroup(false),
+          multipleBirth: el({ type: "unknown", choices: ["multipleBirthBoolean", "multipleBirthInteger"], required: false }),
+          multipleBirthBoolean: el({ type: "boolean", choiceOf: "multipleBirth", required: false }),
+          multipleBirthInteger: el({ type: "integer", choiceOf: "multipleBirth", required: false }),
+        })
+      );
+      expect(source.match(/\.superRefine\(/g)).toHaveLength(1);
+      expect(source).toContain("deceased[x]");
+      expect(source).toContain("multipleBirth[x]");
+    });
   });
 
   it("emits a readable header, the schema const, and an inferred type export", () => {
