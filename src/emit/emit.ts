@@ -51,12 +51,22 @@
  * so both directions of every genuine cycle agree, regardless of which side
  * merge/'s resolution order happened to cut.
  *
+ * Choice types (`value[x]`, phase 3c): a group marker element
+ * (ResolvedElement.choices set, e.g. "value" naming
+ * ["valueQuantity","valueString",...]) is never emitted as its own key —
+ * real FHIR JSON never serializes a literal "value" property, only its
+ * variants. Each variant (choiceOf === markerName) is flattened as an
+ * ordinary optional field with its own real resolved type, and the
+ * containing object gets one `.superRefine()` enforcing FHIR's actual rule:
+ * a choice type is 0..1 (or, when the group itself is required, exactly 1)
+ * of the WHOLE group, not each variant independently. Design doc section 7,
+ * "REJECT/DO BETTER #1" — the closest prior art (@solarahealth/fhir-r4)
+ * flattens the same way but omits this check, so a payload setting BOTH
+ * valueString and valueQuantity passes their validation. See
+ * superRefineForChoiceGroups below.
+ *
  * Explicitly NOT this module's job (see the design doc's Phase 3 sub-phases
  * and this PR's description for the split):
- *   - choice types (value[x] flattening + mutual-exclusivity refine, 3c) —
- *     a choice-type group marker (ResolvedElement.choices set, no concrete
- *     type of its own) emits z.unknown() with a TODO; its variant elements
- *     (choiceOf set) are skipped entirely, same as pre-Phase-2.
  *   - slicing (3d) — a sliced element with no further resolved structure
  *     falls through the same "unresolved complex type" path as extension
  *     elements, below.
@@ -187,13 +197,6 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     expr = objectSchemaBody(el.elements, ctx, indent + "  ");
   } else if (PRIMITIVE_TYPES.has(el.type)) {
     expr = primitiveToZod(el.type);
-  } else if (el.choices) {
-    // A choice-type group marker (e.g. "deceased" naming
-    // ["deceasedBoolean","deceasedDateTime"]) — FHIR Schema gives the group
-    // marker itself no concrete type of its own. Flattening + a
-    // mutual-exclusivity .superRefine() is phase 3c's job.
-    ctx.warnings.push(`Element "${name}" is a choice-type group (${el.choices.join(", ")}) — flattening not implemented yet (phase 3c).`);
-    expr = "z.unknown() /* TODO(phase 3c): choice type (value[x]) flattening not implemented yet */";
   } else {
     // A named complex type merge/ couldn't expand at all — SchemaSource has
     // no entry for it (e.g. "Extension", deliberately excluded from the
@@ -239,20 +242,113 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
   return expr;
 }
 
+/** One `value[x]`-style choice group at a single object level, ready to emit as a `.superRefine()` check. */
+interface ChoiceGroup {
+  /** The FHIR base name, e.g. "value" for value[x] — never a real JSON key itself, only used in messages/paths. */
+  markerName: string;
+  /** The variant keys actually present in this object (e.g. ["valueString", "valueQuantity", ...]), in stable declaration order. */
+  variantNames: string[];
+  /** True when the group marker's own `required` (derived from the PARENT's required list, same as any element) is set — see superRefineForChoiceGroups. */
+  required: boolean;
+}
+
 function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitContext, indent: string): string {
   const lines: string[] = [];
   const closeIndent = indent.slice(0, -2);
+  const choiceGroups: ChoiceGroup[] = [];
 
   for (const [name, el] of Object.entries(elements)) {
-    // Choice-type variants (deceasedBoolean, deceasedDateTime, ...) are
-    // handled at their group marker (choices), not flattened individually
-    // here — see elementToZod's choices branch. Emitting them as their own
-    // keys too would duplicate data the group marker already covers.
-    if (el.choiceOf) continue;
+    if (el.choices) {
+      // A choice-type group marker (e.g. "value" naming
+      // ["valueQuantity","valueString",...]) — never a real JSON key (see
+      // this file's module comment). Its variants are flattened as their
+      // own ordinary fields below (they no longer hit this branch, since
+      // only the marker itself carries `choices`); recorded here so a
+      // .superRefine() enforcing FHIR's mutual-exclusivity rule can be
+      // appended once the object literal closes.
+      //
+      // variantNames comes from scanning `elements` for choiceOf === name,
+      // not from el.choices directly — that keeps this in sync with
+      // whatever variant keys this object actually emits, rather than
+      // trusting a list that could in principle name a variant merge/
+      // didn't carry through.
+      const variantNames = Object.entries(elements)
+        .filter(([, variantEl]) => variantEl.choiceOf === name)
+        .map(([variantName]) => variantName);
+      if (variantNames.length > 0) {
+        choiceGroups.push({ markerName: name, variantNames, required: el.required });
+      }
+      continue;
+    }
     lines.push(`${indent}${JSON.stringify(name)}: ${elementToZod(name, el, ctx, indent)},`);
   }
 
-  return `z.object({\n${lines.join("\n")}\n${closeIndent}})`;
+  const objectExpr = `z.object({\n${lines.join("\n")}\n${closeIndent}})`;
+  return choiceGroups.length > 0 ? `${objectExpr}${superRefineForChoiceGroups(choiceGroups, closeIndent)}` : objectExpr;
+}
+
+/**
+ * Emits one `.superRefine()` — covering every choice group at this object
+ * level, not one call per group — enforcing FHIR's actual choice-type rule:
+ * a `value[x]`-style group is 0..1 of the WHOLE group (or exactly 1 when
+ * the group itself is required), never each variant independently. Design
+ * doc section 7, "REJECT/DO BETTER #1": the closest prior art
+ * (@solarahealth/fhir-r4) flattens value[x] into N independent optional
+ * keys with no refine at all, so a payload setting BOTH valueString and
+ * valueQuantity passes their validation.
+ *
+ * A group whose marker is itself required gets "exactly one"; every other
+ * group gets "at most one". Getting this backwards — "exactly one" on an
+ * optional group — would reject conformant data that legitimately omits
+ * the whole choice, which this project treats as worse than under-
+ * validating (see CLAUDE.md's conformance rules and this module's z.enum
+ * handling for the same principle applied to bindings).
+ *
+ * `(["a", "b"] as const)` (not a bare array literal) is load-bearing, not
+ * stylistic: without `as const` the array infers as `string[]`, and
+ * `data[key]` with a plain `string` key fails to compile under `tsc
+ * --strict` against an object type with specific known keys (confirmed
+ * against a standalone repro before writing this) — `as const` narrows
+ * `key` to the literal union of this group's actual variant names, which
+ * are the object's own keys.
+ */
+function superRefineForChoiceGroups(groups: ChoiceGroup[], baseIndent: string): string {
+  const checkIndent = `${baseIndent}  `;
+  const checks = groups
+    .map((group) => {
+      const keysExpr = `[${group.variantNames.map((n) => JSON.stringify(n)).join(", ")}] as const`;
+      const groupLabel = `${group.markerName}[x]`;
+      const variantList = group.variantNames.join(", ");
+
+      const message = group.required
+        ? [
+            `${checkIndent}      message:`,
+            `${checkIndent}        present.length === 0`,
+            `${checkIndent}          ? \`Exactly one of ${variantList} is required (choice type "${groupLabel}"), but none were provided.\``,
+            `${checkIndent}          : \`Exactly one of ${variantList} is required (choice type "${groupLabel}"), but multiple were provided: \${present.join(", ")}.\`,`,
+          ].join("\n")
+        : `${checkIndent}      message: \`At most one of ${variantList} may be set (choice type "${groupLabel}"), but multiple were provided: \${present.join(", ")}.\`,`;
+
+      const path = group.required
+        ? `present.length === 0 ? [${JSON.stringify(group.markerName)}] : present`
+        : "present";
+
+      return [
+        `${checkIndent}{`,
+        `${checkIndent}  const present = (${keysExpr}).filter((key) => data[key] !== undefined);`,
+        `${checkIndent}  if (${group.required ? "present.length !== 1" : "present.length > 1"}) {`,
+        `${checkIndent}    ctx.addIssue({`,
+        `${checkIndent}      code: "custom",`,
+        message,
+        `${checkIndent}      path: ${path},`,
+        `${checkIndent}    });`,
+        `${checkIndent}  }`,
+        `${checkIndent}}`,
+      ].join("\n");
+    })
+    .join("\n");
+
+  return `.superRefine((data, ctx) => {\n${checks}\n${baseIndent}})`;
 }
 
 /**
@@ -263,10 +359,18 @@ function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitCo
  * boundary — that type's own further references are collected separately,
  * from its own registry entry (see discoverNamedTypes), not by recursing
  * through this particular occurrence of it.
+ *
+ * Choice-type variants (choiceOf set) are walked like any other element,
+ * not skipped: since they're flattened as real fields (choice types, phase
+ * 3c), a complex-typed variant (e.g. Observation.valueQuantity ->
+ * Quantity) needs its target type discovered and its own file emitted the
+ * same as a non-choice field would. The group marker itself (choices set,
+ * no concrete type) never reaches this function — objectSchemaBody handles
+ * it separately and never recurses into a marker's own (nonexistent)
+ * `elements`.
  */
 function collectNamedTypeRefs(elements: Record<string, ResolvedElement>, targets: Set<string>): void {
   for (const el of Object.values(elements)) {
-    if (el.choiceOf) continue;
     if (el.isNamedType) {
       targets.add(el.type);
     } else if (el.elements) {
@@ -299,7 +403,8 @@ function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<strin
   while (queue.length > 0) {
     const elements = queue.shift()!;
     for (const el of Object.values(elements)) {
-      if (el.choiceOf) continue;
+      // Choice variants aren't skipped here either — see
+      // collectNamedTypeRefs's doc comment above for why.
       if (el.isNamedType) {
         if (el.elements && !registry.has(el.type)) {
           registry.set(el.type, el.elements);
