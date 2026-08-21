@@ -24,6 +24,33 @@
  * primitiveToZod(el.type) with a loud TODO marker — see elementToZod's
  * binding branch.
  *
+ * Issue #6 update: complex-typed fields (ResolvedElement.isNamedType) are no
+ * longer inlined. A field whose type is a reusable named datatype
+ * (HumanName, Identifier, Reference, ...) emits a plain cross-file reference
+ * — `IdentifierSchema`, imported from `./Identifier.js` — and that type gets
+ * its own emitted file (strategy B from the PR description: one file per
+ * complex datatype, over strategy A's "inline + local z.lazy per cycle").
+ * BackboneElement structure (always profile-local, never a reusable type)
+ * stays inlined exactly as before. A field the SchemaSource has no entry
+ * for (e.g. "Extension" — see resolve.ts's module comment) still falls back
+ * to z.unknown() with a loud TODO — that half of defect 5 (no SchemaSource
+ * entry at all) is a different problem than this issue closes (a *known*
+ * type with no real cross-file wiring).
+ *
+ * z.lazy() is reserved for genuine cycles — see collectNamedTypeRefs/
+ * computeReachability/isCyclicEdge below. A field's own `ResolvedElement.
+ * isCyclic` (set by merge/'s single-path cycle cut) is NOT used directly to
+ * decide lazy-vs-plain here: a real mutual cycle between two files (e.g.
+ * Identifier <-> Reference) needs *both* directions wrapped in z.lazy(), not
+ * just the specific occurrence merge/ happened to cut, or a plain eager
+ * cross-file reference on the other side can throw
+ * "Cannot access 'XSchema' before initialization" at module load time
+ * depending on which of the two circularly-importing files loads first —
+ * confirmed empirically against Node's ESM loader before writing this.
+ * `isCyclicEdge` recomputes cycle membership from the whole reference graph
+ * so both directions of every genuine cycle agree, regardless of which side
+ * merge/'s resolution order happened to cut.
+ *
  * Explicitly NOT this module's job (see the design doc's Phase 3 sub-phases
  * and this PR's description for the split):
  *   - choice types (value[x] flattening + mutual-exclusivity refine, 3c) —
@@ -31,11 +58,8 @@
  *     type of its own) emits z.unknown() with a TODO; its variant elements
  *     (choiceOf set) are skipped entirely, same as pre-Phase-2.
  *   - slicing (3d) — a sliced element with no further resolved structure
- *     falls through the same "unresolved complex type" path as extension/
- *     cyclic elements, below.
- *   - defect 5's full half (real cross-file imports + z.lazy() for cycles)
- *     — see the "unresolved complex type" branch in elementToZod for the
- *     minimal compiling story this module uses instead.
+ *     falls through the same "unresolved complex type" path as extension
+ *     elements, below.
  */
 
 import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
@@ -104,21 +128,28 @@ function escapeForBlockComment(text: string): string {
 interface EmitContext {
   warnings: string[];
   terminology?: TerminologySource;
+  /** The type/document name of the file currently being built — the "from" side of an isCyclicEdge(from, to) check. */
+  currentType: string;
+  /** Named types this file references directly (top-level or via inline BackboneElement nesting) — becomes its import block. */
+  imports: Set<string>;
+  /** True iff a reference from `from`'s file to `to`'s file is part of a genuine cycle and must be z.lazy()-wrapped. */
+  isCyclicEdge: (from: string, to: string) => boolean;
 }
 
 function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, indent: string): string {
   let expr: string;
   let bindingTodo: string | undefined;
 
-  if (el.isCyclic) {
-    // Cut short by merge/'s cycle guard (e.g. Identifier -> Reference ->
-    // Identifier). The two-tier z.lazy() recursion strategy that would give
-    // this a real schema is design doc section 7's "STEAL #1" — bundled
-    // into defect 5, not this phase. z.unknown() is the honest fallback
-    // (design doc section 7, "REJECT/DO BETTER #4": say so loudly, don't
-    // silently under-validate).
-    ctx.warnings.push(`Element "${name}" is a cyclic reference (type "${el.type}") — z.lazy() cycle support not implemented yet.`);
-    expr = "z.unknown() /* TODO(defect 5): cyclic reference — z.lazy() cycle emission not implemented yet */";
+  if (el.isNamedType) {
+    // A reusable named complex type (HumanName, Identifier, Reference, ...)
+    // resolved via SchemaSource — issue #6. Cross-file reference, never
+    // inlined; see this file's module comment for why lazy-vs-plain is
+    // decided from the whole reference graph rather than el.isCyclic alone.
+    const typeIdent = toIdentifier(el.type);
+    ctx.imports.add(el.type);
+    expr = ctx.isCyclicEdge(ctx.currentType, el.type)
+      ? `z.lazy((): z.ZodTypeAny => ${typeIdent}Schema)`
+      : `${typeIdent}Schema`;
   } else if (el.binding?.strength === "required" && el.binding.valueSet && PRIMITIVE_TYPES.has(el.type)) {
     // Defect 2. ONLY strength:"required" reaches here — see this function's
     // caller comment and the design doc's conformance rule: extensible/
@@ -143,9 +174,10 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
       bindingTodo = `/* TODO(defect 2): required binding "${el.binding.valueSet}" could not be expanded — ${escapeForBlockComment(expansion.reason)} */`;
     }
   } else if (el.elements && Object.keys(el.elements).length > 0) {
-    // Resolved structure — a BackboneElement, or a complex type merge/
-    // expanded via SchemaSource (e.g. HumanName, Identifier). Works
-    // uniformly for both; ResolvedElement doesn't need to distinguish them.
+    // Inline structure — a BackboneElement (profile-local, never a reusable
+    // named type; isNamedType is unset). Genuine named types were already
+    // handled above and never reach this branch even though they too carry
+    // `elements`.
     expr = objectSchemaBody(el.elements, ctx, indent + "  ");
   } else if (PRIMITIVE_TYPES.has(el.type)) {
     expr = primitiveToZod(el.type);
@@ -157,15 +189,14 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     ctx.warnings.push(`Element "${name}" is a choice-type group (${el.choices.join(", ")}) — flattening not implemented yet (phase 3c).`);
     expr = "z.unknown() /* TODO(phase 3c): choice type (value[x]) flattening not implemented yet */";
   } else {
-    // A named complex type merge/ couldn't expand further — either
-    // SchemaSource has no entry for it (e.g. "Extension", deliberately
-    // excluded from the fixture-backed source, see merge/resolve.ts's
-    // module comment) or it's mid-slicing (phase 3d). Either way there's no
-    // resolved structure and no real cross-file import wiring yet (that's
-    // defect 5's other half) — z.unknown() is the simplest thing that
-    // compiles, with a loud TODO rather than a silent gap.
+    // A named complex type merge/ couldn't expand at all — SchemaSource has
+    // no entry for it (e.g. "Extension", deliberately excluded from the
+    // fixture-backed source, see merge/resolve.ts's module comment), or
+    // it's mid-slicing (phase 3d). There's nowhere to import a schema from,
+    // so z.unknown() is the honest fallback, with a loud TODO rather than a
+    // silent gap.
     ctx.warnings.push(`Element "${name}" has type "${el.type}" with no resolved structure — defaulting to z.unknown().`);
-    expr = `z.unknown() /* TODO(defect 5): "${el.type}" has no resolved structure — cross-file schema resolution not implemented yet */`;
+    expr = `z.unknown() /* TODO: "${el.type}" has no resolved structure in the configured SchemaSource — falling back to z.unknown() */`;
   }
 
   if (el.array) {
@@ -218,6 +249,125 @@ function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitCo
   return `z.object({\n${lines.join("\n")}\n${closeIndent}})`;
 }
 
+/**
+ * Walks `elements` looking for cross-file references
+ * (ResolvedElement.isNamedType), collecting the referenced type names into
+ * `targets`. Recurses into inline BackboneElement structure (same file:
+ * `elements` populated but `isNamedType` unset) but stops at a named-type
+ * boundary — that type's own further references are collected separately,
+ * from its own registry entry (see discoverNamedTypes), not by recursing
+ * through this particular occurrence of it.
+ */
+function collectNamedTypeRefs(elements: Record<string, ResolvedElement>, targets: Set<string>): void {
+  for (const el of Object.values(elements)) {
+    if (el.choiceOf) continue;
+    if (el.isNamedType) {
+      targets.add(el.type);
+    } else if (el.elements) {
+      collectNamedTypeRefs(el.elements, targets);
+    }
+  }
+}
+
+/**
+ * Discovers every named complex type reachable from `roots` (the element
+ * maps of one or more documents/types), returning a type-name -> elements
+ * registry. Each entry becomes its own emitted file (issue #6, strategy B —
+ * one file per complex datatype, over strategy A's "inline + local z.lazy
+ * per cycle"; see the PR description for why).
+ *
+ * A type is registered the first time a *non-cyclic* occurrence supplies its
+ * elements. That's guaranteed to happen somewhere in the walk for every type
+ * genuinely referenced: within any single top-down resolution, the first
+ * time a type is encountered it is always expanded in full — merge/'s
+ * "creating"/"created" cache can only report a cycle for a *re-entrant*
+ * visit, never a first one (see resolve.ts's resolveTypeElements) — so a
+ * cyclic occurrence elsewhere in the graph never leaves a type
+ * unregistered, it just means that occurrence's own `elements` is skipped
+ * here in favor of the one that already populated the registry.
+ */
+function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<string, Record<string, ResolvedElement>> {
+  const registry = new Map<string, Record<string, ResolvedElement>>();
+  const queue: Record<string, ResolvedElement>[] = [...roots];
+
+  while (queue.length > 0) {
+    const elements = queue.shift()!;
+    for (const el of Object.values(elements)) {
+      if (el.choiceOf) continue;
+      if (el.isNamedType) {
+        if (el.elements && !registry.has(el.type)) {
+          registry.set(el.type, el.elements);
+          queue.push(el.elements);
+        }
+      } else if (el.elements) {
+        queue.push(el.elements);
+      }
+    }
+  }
+
+  return registry;
+}
+
+/** type name -> the set of other type names it references directly. */
+function buildTypeEdges(registry: Map<string, Record<string, ResolvedElement>>): Map<string, Set<string>> {
+  const edges = new Map<string, Set<string>>();
+  for (const [typeName, elements] of registry) {
+    const targets = new Set<string>();
+    collectNamedTypeRefs(elements, targets);
+    edges.set(typeName, targets);
+  }
+  return edges;
+}
+
+/** type name -> every type name transitively reachable from it via `edges`. */
+function computeReachability(edges: Map<string, Set<string>>): Map<string, Set<string>> {
+  const reach = new Map<string, Set<string>>();
+  for (const start of edges.keys()) {
+    const seen = new Set<string>();
+    const stack = [...(edges.get(start) ?? [])];
+    while (stack.length > 0) {
+      const next = stack.pop() as string;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      for (const n of edges.get(next) ?? []) stack.push(n);
+    }
+    reach.set(start, seen);
+  }
+  return reach;
+}
+
+/**
+ * Builds the isCyclicEdge(from, to) decision elementToZod uses to choose
+ * z.lazy() vs a plain reference. An edge is a genuine cycle — and must be
+ * z.lazy()-wrapped on *both* ends, not just one — iff `to` can reach back to
+ * `from`.
+ *
+ * Deliberately NOT driven by the referencing ResolvedElement's own
+ * `isCyclic` flag: that flag marks the *single* occurrence merge/'s
+ * single-path walk happened to cut a re-entrant expansion at, which for a
+ * real two-file cycle (e.g. Identifier <-> Reference) is only ever one of
+ * the two directions — which one depends on resolution order (which type
+ * was reached first), not on anything meaningful to emit/. Wrapping only
+ * that one occurrence and leaving the other as a plain eager
+ * `import { XSchema } from "./X.js"; ...XSchema...` reference is unsafe: in
+ * a genuine circular ES module import, whichever of the two files a
+ * consumer's module graph happens to load first will, at its own top-level
+ * `z.object({...})` construction, dereference the *other* file's still-
+ * uninitialized export and throw "Cannot access 'XSchema' before
+ * initialization" — confirmed empirically against Node's ESM loader while
+ * building this. Recomputing cycle membership from the whole reference
+ * graph (rather than trusting the single flagged occurrence) guarantees
+ * both directions agree, so neither file's top-level code ever needs the
+ * other's value before it's had a chance to exist.
+ */
+function buildCyclicEdgeChecker(
+  registry: Map<string, Record<string, ResolvedElement>>
+): (from: string, to: string) => boolean {
+  const edges = buildTypeEdges(registry);
+  const reach = computeReachability(edges);
+  return (from, to) => from === to || (reach.get(to)?.has(from) ?? false);
+}
+
 export interface EmitResult {
   fileName: string;
   source: string;
@@ -264,26 +414,45 @@ export function toIdentifier(name: string): string {
   return /^[0-9]/.test(joined) ? `_${joined}` : joined;
 }
 
-/**
- * Emit a single .ts file (Zod schema + inferred type) for one resolved FHIR
- * Schema document (one profile or base resource, already merged with its
- * base — see src/merge/).
- */
-export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}): EmitResult {
-  const ctx: EmitContext = { warnings: [], terminology: options.terminology };
-  const typeName = toIdentifier(schema.name);
+interface FileMeta {
+  url?: string;
+  kind?: string;
+  base?: string;
+  derivation?: string;
+  /** True for a shared complex-datatype file (registry entry); false for a resource/profile document. */
+  isDatatype: boolean;
+}
+
+/** Emits one .ts file's full source (header, imports, schema const, inferred type) for either a document or a registered datatype. */
+function emitOneFile(
+  name: string,
+  elements: Record<string, ResolvedElement>,
+  meta: FileMeta,
+  isCyclicEdge: (from: string, to: string) => boolean,
+  options: EmitOptions
+): EmitResult {
+  const imports = new Set<string>();
+  const ctx: EmitContext = { warnings: [], terminology: options.terminology, currentType: name, imports, isCyclicEdge };
+  const typeName = toIdentifier(name);
   const constName = `${typeName}Schema`;
 
-  const body = objectSchemaBody(schema.elements, ctx, "  ");
+  const body = objectSchemaBody(elements, ctx, "  ");
+
+  const importLines = [...imports]
+    .sort()
+    .map((typeRef) => `import { ${toIdentifier(typeRef)}Schema } from "./${typeRef}.js";`);
 
   const header = [
     "// AUTO-GENERATED by fhir-zod-gen — do not edit by hand.",
-    `// Source: ${schema.url}`,
-    `// Kind: ${schema.kind}${schema.base ? `, base: ${schema.base}` : ""}`,
-    schema.derivation === "constraint"
+    meta.isDatatype
+      ? `// Complex datatype: ${name} — shared, referenced by one or more resources/profiles/other datatypes in this package.`
+      : `// Source: ${meta.url}`,
+    !meta.isDatatype ? `// Kind: ${meta.kind}${meta.base ? `, base: ${meta.base}` : ""}` : null,
+    !meta.isDatatype && meta.derivation === "constraint"
       ? "// This is a profile (constraint), not a base resource — fields narrow the base type's cardinality/bindings."
       : null,
     'import { z } from "zod";',
+    ...importLines,
     "",
   ]
     .filter((l): l is string => l !== null)
@@ -292,8 +461,72 @@ export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}):
   const source = `${header}export const ${constName} = ${body};\n\nexport type ${typeName} = z.infer<typeof ${constName}>;\n`;
 
   return {
-    fileName: `${schema.name}.ts`,
+    fileName: `${name}.ts`,
     source,
     warnings: ctx.warnings,
   };
+}
+
+/**
+ * Emit a single .ts file (Zod schema + inferred type) for one resolved FHIR
+ * Schema document (one profile or base resource, already merged with its
+ * base — see src/merge/).
+ *
+ * Scoped to just this document: any complex datatype it references
+ * (ResolvedElement.isNamedType) is emitted as a cross-file
+ * `import { XSchema } from "./X.js"`, but that referenced type's own file is
+ * NOT part of this call's return value — only emitPackage's is. Cycle
+ * detection is still correct even so: it only needs this document's own
+ * already-fully-merged element tree (see discoverNamedTypes's doc comment
+ * on why a full, non-cyclic expansion of every referenced type is always
+ * reachable from a single top-down walk).
+ */
+export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}): EmitResult {
+  const registry = discoverNamedTypes([schema.elements]);
+  const isCyclicEdge = buildCyclicEdgeChecker(registry);
+  return emitOneFile(
+    schema.name,
+    schema.elements,
+    { url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
+    isCyclicEdge,
+    options
+  );
+}
+
+/**
+ * Emit a whole package: one file per document in `schemas`, plus one file
+ * per complex datatype any of them reference directly or transitively — the
+ * counterpart emitDocument alone can't produce, since a document's
+ * complex-typed fields are cross-file references (issue #6, strategy B).
+ * Types are deduplicated by name across the whole batch: Identifier is
+ * emitted exactly once even though both Patient and Observation reference
+ * it, and Identifier <-> Reference's genuine cycle is resolved consistently
+ * across every file that touches either type (see buildCyclicEdgeChecker).
+ *
+ * This is what generate.ts's generatePackage should call once, over every
+ * successfully-resolved document, rather than looping emitDocument per
+ * document — a per-document loop would either duplicate every referenced
+ * datatype's file once per referencing document, or (worse) never emit them
+ * at all, per emitDocument's own doc comment above.
+ */
+export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}): EmitResult[] {
+  const registry = discoverNamedTypes(schemas.map((s) => s.elements));
+  const isCyclicEdge = buildCyclicEdgeChecker(registry);
+
+  const results: EmitResult[] = [];
+  for (const schema of schemas) {
+    results.push(
+      emitOneFile(
+        schema.name,
+        schema.elements,
+        { url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
+        isCyclicEdge,
+        options
+      )
+    );
+  }
+  for (const [typeName, elements] of registry) {
+    results.push(emitOneFile(typeName, elements, { isDatatype: true }, isCyclicEdge, options));
+  }
+  return results;
 }

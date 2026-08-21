@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
-import { emitDocument } from "./emit/index.js";
-import { resolveDocument, type SchemaSource } from "./merge/index.js";
+import { emitPackage, type EmitResult } from "./emit/index.js";
+import { resolveDocument, type ResolvedSchema, type SchemaSource } from "./merge/index.js";
 import { generateSchemaFile } from "./mapper.js";
 import type { TerminologySource } from "./terminology/index.js";
 
@@ -47,14 +47,28 @@ export async function generatePackage(
   const filesWritten: string[] = [];
   const failures: GenerateFailure[] = [];
   let warningCount = 0;
-  const exportLines: string[] = [];
+
+  // Two passes, not one: emitPackage (issue #6) needs every document's
+  // ResolvedSchema up front to discover and dedupe the complex datatypes
+  // they share (Identifier, HumanName, ...) across the whole batch, and to
+  // resolve genuine cross-type cycles (Identifier <-> Reference)
+  // consistently everywhere they're referenced. Emitting per-document inside
+  // the resolve loop, as before issue #6, can't do either — it would either
+  // duplicate each shared datatype's file once per referencing document or
+  // never emit it at all.
+  const resolved: ResolvedSchema[] = [];
+  // mapper.ts's shim path (no SchemaSource) has no base/complex-type
+  // resolution to do, so it stays a direct per-document emit — there is
+  // nothing for emitPackage to batch there.
+  const shimResults: EmitResult[] = [];
 
   for (const doc of docs) {
-    let result;
+    if (!opts.source) {
+      shimResults.push(generateSchemaFile(doc));
+      continue;
+    }
     try {
-      result = opts.source
-        ? emitDocument(resolveDocument(doc, opts.source), { terminology: opts.terminology })
-        : generateSchemaFile(doc);
+      resolved.push(resolveDocument(doc, opts.source));
     } catch (err) {
       // merge/ throws rather than guessing when it can't reach a base — e.g.
       // a profile whose own base is a profile. Skipping one document and
@@ -65,19 +79,32 @@ export async function generatePackage(
         url: doc.url,
         message: err instanceof Error ? err.message : String(err),
       });
-      continue;
     }
+  }
+
+  const results = [...shimResults, ...emitPackage(resolved, { terminology: opts.terminology })];
+
+  // Dedup by file name: two documents (or, in principle, a document and a
+  // datatype) sharing a name would otherwise silently overwrite each other
+  // on disk and emit the same barrel-index line twice (issue #14) — not
+  // fully solved here (see issue #14), but not made worse either.
+  const seenFileNames = new Set<string>();
+  const exportLines: string[] = [];
+
+  for (const result of results) {
+    if (seenFileNames.has(result.fileName)) continue;
+    seenFileNames.add(result.fileName);
 
     const outPath = join(opts.outDir, result.fileName);
     await writeFile(outPath, result.source, "utf-8");
     filesWritten.push(outPath);
-    exportLines.push(`export * from "./${doc.name}.js";`);
+    exportLines.push(`export * from "./${result.fileName.replace(/\.ts$/, "")}.js";`);
 
     if (result.warnings.length) {
       warningCount += result.warnings.length;
       if (opts.verbose) {
         for (const w of result.warnings) {
-          console.warn(`[${doc.name}] ${w}`);
+          console.warn(`[${result.fileName}] ${w}`);
         }
       }
     }

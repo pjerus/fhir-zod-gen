@@ -32,16 +32,31 @@ afterEach(() => {
 describe("generatePackage", () => {
   it("resolves a profile against the supplied SchemaSource", async () => {
     const source = loadFixtureSchemaSource(FIXTURES);
-    const { filesWritten, failures } = await generatePackage([profile], { outDir, source });
+    const { failures } = await generatePackage([profile], { outDir, source });
 
     expect(failures).toEqual([]);
-    expect(readdirSync(outDir).sort()).toEqual([`${profile.name}.ts`, "index.ts"]);
+    // Issue #6: complex-typed fields are cross-file references now, so the
+    // profile's own file is joined on disk by every complex datatype it
+    // references (HumanName, Identifier, ...), not just itself + the index.
+    const written = readdirSync(outDir).sort();
+    expect(written).toContain(`${profile.name}.ts`);
+    expect(written).toContain("HumanName.ts");
+    expect(written).toContain("index.ts");
 
     // Concrete types merged in from the base resource — the whole point of
     // passing a source. Without one, `name` has no type at all in the profile.
-    const generated = readFileSync(filesWritten[0], "utf-8");
-    expect(generated).toContain('"name": z.array(');
-    expect(generated).toContain('"family": z.string()');
+    const generatedProfile = readFileSync(join(outDir, `${profile.name}.ts`), "utf-8");
+    expect(generatedProfile).toContain('"name": z.array(');
+    expect(generatedProfile).toContain("HumanNameSchema");
+
+    const generatedHumanName = readFileSync(join(outDir, "HumanName.ts"), "utf-8");
+    expect(generatedHumanName).toContain('"family": z.string()');
+
+    // The barrel index re-exports every emitted file exactly once.
+    const index = readFileSync(join(outDir, "index.ts"), "utf-8");
+    const indexLines = index.trim().split("\n");
+    expect(new Set(indexLines).size).toBe(indexLines.length);
+    expect(indexLines).toHaveLength(written.length - 1); // every written file except index.ts itself
   });
 
   it("reports a document it could not resolve instead of aborting or writing it", async () => {

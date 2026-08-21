@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { emitDocument } from "./emit.js";
+import { emitDocument, emitPackage } from "./emit.js";
 import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
 import type { TerminologySource } from "../terminology/index.js";
 
@@ -112,22 +112,51 @@ describe("emitDocument", () => {
     expect(source).not.toContain("contains */ a close marker");
   });
 
-  it("falls back to z.unknown() with a defect-5 TODO for a cyclic reference, instead of recursing forever", () => {
-    const { source, warnings } = emitDocument(
-      schema({ assigner: el({ type: "Identifier", isCyclic: true, required: false }) })
+  it("emits a plain cross-file reference (not z.unknown()) for a type that is cyclic *within itself*, not with this document — issue #6", () => {
+    // A document is never itself part of a datatype cycle (FHIR resources
+    // aren't referenced back by the complex types they use) — see
+    // emit.ts's buildCyclicEdgeChecker doc comment. z.lazy() only shows up
+    // inside the cyclic TYPE's own emitted file (Identifier.ts here), which
+    // emitDocument alone doesn't produce (only emitPackage does — see the
+    // "wraps both directions of a genuine two-file cycle" test below for
+    // that). This test mirrors real merge/ output: the FIRST occurrence of
+    // a type in a top-down walk always carries its full elements (here,
+    // "identifier" supplies Identifier's own fields, including its own
+    // "assigner" field pointing back at "Identifier" — the re-entrant,
+    // merge/-cut occurrence that has no elements of its own).
+    const { source, fileName } = emitDocument(
+      schema({
+        identifier: el({
+          type: "Identifier",
+          isNamedType: true,
+          required: false,
+          elements: {
+            assigner: el({ type: "Identifier", isNamedType: true, isCyclic: true, required: false }),
+          },
+        }),
+      })
     );
-    expect(source).toContain('"assigner": z.unknown()');
-    expect(source).toContain("TODO(defect 5)");
-    expect(source).toContain("cyclic reference");
-    expect(warnings).toHaveLength(1);
+    expect(fileName).toBe("TestResource.ts");
+    expect(source).toContain('import { IdentifierSchema } from "./Identifier.js";');
+    expect(source).toContain('"identifier": IdentifierSchema.optional()');
+    expect(source).not.toContain("z.unknown()");
   });
 
-  it("falls back to z.unknown() with a defect-5 TODO for a complex type with no resolved structure (e.g. Extension)", () => {
+  it("emits a non-cyclic named-type reference as a plain reference, not z.lazy()", () => {
+    const { source } = emitDocument(
+      schema({ name: el({ type: "HumanName", isNamedType: true, required: false }) })
+    );
+    expect(source).toContain('import { HumanNameSchema } from "./HumanName.js";');
+    expect(source).toContain('"name": HumanNameSchema.optional()');
+    expect(source).not.toContain("z.lazy(");
+  });
+
+  it("falls back to z.unknown() with a loud TODO for a complex type with no resolved structure (e.g. Extension)", () => {
     const { source, warnings } = emitDocument(
       schema({ extension: el({ type: "Extension", required: false }) })
     );
     expect(source).toContain('"extension": z.unknown()');
-    expect(source).toContain("TODO(defect 5)");
+    expect(source).toContain("TODO:");
     expect(source).not.toContain("ExtensionSchema");
     expect(warnings).toHaveLength(1);
   });
@@ -244,5 +273,61 @@ describe("emitDocument", () => {
       expect(source).toContain('"gender": z.string() /* TODO(defect 2)');
       expect(warnings[0]).toContain("no terminology source configured");
     });
+  });
+});
+
+describe("emitPackage", () => {
+  it("emits one file per document plus one file per complex datatype they reference, deduplicated across the whole batch", () => {
+    const identifierElements: Record<string, ResolvedElement> = {
+      value: el({ type: "string", required: false }),
+    };
+    const patient = schema(
+      { identifier: el({ type: "Identifier", isNamedType: true, required: false, elements: identifierElements }) },
+      { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" }
+    );
+    const observation = schema(
+      { subject: el({ type: "Identifier", isNamedType: true, required: false, elements: identifierElements }) },
+      { name: "Observation", url: "http://hl7.org/fhir/StructureDefinition/Observation" }
+    );
+
+    const results = emitPackage([patient, observation]);
+    const fileNames = results.map((r) => r.fileName).sort();
+
+    expect(fileNames).toEqual(["Identifier.ts", "Observation.ts", "Patient.ts"]);
+    const identifierFile = results.find((r) => r.fileName === "Identifier.ts")!;
+    expect(identifierFile.source).toContain("export const IdentifierSchema = z.object({");
+    expect(identifierFile.source).toContain('"value": z.string().optional(),');
+  });
+
+  it("wraps both directions of a genuine two-file cycle in z.lazy(), regardless of which occurrence merge/ happened to flag isCyclic", () => {
+    // Mirrors the real Identifier <-> Reference cycle: Identifier.assigner
+    // (full elements, not itself flagged cyclic) points at Reference, whose
+    // own "identifier" field is the one merge/ cut (isCyclic, no elements).
+    const referenceElements: Record<string, ResolvedElement> = {
+      identifier: el({ type: "Identifier", isNamedType: true, isCyclic: true, required: false }),
+    };
+    const identifierElements: Record<string, ResolvedElement> = {
+      assigner: el({ type: "Reference", isNamedType: true, required: false, elements: referenceElements }),
+    };
+    const patient = schema(
+      { identifier: el({ type: "Identifier", isNamedType: true, required: false, elements: identifierElements }) },
+      { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" }
+    );
+
+    const results = emitPackage([patient]);
+    const identifierFile = results.find((r) => r.fileName === "Identifier.ts")!;
+    const referenceFile = results.find((r) => r.fileName === "Reference.ts")!;
+
+    // The occurrence merge/ flagged isCyclic (Reference.identifier) is lazy...
+    expect(referenceFile.source).toContain('"identifier": z.lazy((): z.ZodTypeAny => IdentifierSchema)');
+    // ...and so is the OTHER direction (Identifier.assigner), even though
+    // merge/ never flagged it — required for runtime safety against
+    // circular-ES-module load order, see emit.ts's module comment.
+    expect(identifierFile.source).toContain('"assigner": z.lazy((): z.ZodTypeAny => ReferenceSchema)');
+
+    // Patient -> Identifier is NOT part of the cycle: plain reference.
+    const patientFile = results.find((r) => r.fileName === "Patient.ts")!;
+    expect(patientFile.source).toContain('"identifier": IdentifierSchema.optional()');
+    expect(patientFile.source).not.toContain("z.lazy(");
   });
 });
