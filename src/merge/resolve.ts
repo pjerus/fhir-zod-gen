@@ -308,6 +308,10 @@ function resolveOneElement(
     // (cyclic) -> ... forever, once Identifier is reached a second time via
     // a resolvedBase overlay rather than a fresh resolveTypeElements call.
     resolved.isCyclic = true;
+    // effectiveBase was itself a named-type cyclic dead-end (only named
+    // types ever get isCyclic) — carry that classification forward too, see
+    // ResolvedElement.isNamedType's doc comment.
+    resolved.isNamedType = true;
     childResolvedBase = undefined;
   } else if (type === "BackboneElement") {
     // Inline structure only, defined directly on whichever layer (profile
@@ -316,14 +320,17 @@ function resolveOneElement(
     const expansion = resolveTypeElements(type, source, cache);
     if (expansion.status === "cyclic") {
       resolved.isCyclic = true;
+      resolved.isNamedType = true;
       childResolvedBase = undefined;
     } else if (expansion.status === "resolved") {
       childResolvedBase = expansion.elements;
+      resolved.isNamedType = true;
     }
     // "not-found": SchemaSource has no document for this type name (e.g.
     // Extension). Keep whatever childResolvedBase already was — normally
     // undefined, since a type-not-found element has nothing upstream to
-    // have populated it either.
+    // have populated it either. isNamedType stays unset: emit/ has nowhere
+    // to import this type's schema from, so it falls back to z.unknown().
   }
   // Primitives: no structure to expand; childResolvedBase stays whatever
   // resolvedBase already had (normally undefined).
