@@ -28,7 +28,7 @@
     "hl7"
   ],
   "dependencies": {
-    "zod": "^3.23.0"
+    "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
     "@atomic-ehr/fhirschema": "^0.0.14",
