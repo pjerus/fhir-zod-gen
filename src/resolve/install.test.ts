@@ -47,7 +47,9 @@ describe("installPackageClosure", () => {
     expect(primary.name).toBe("test.fhir.mini");
     expect(primary.version).toBe("1.0.0");
     expect(packages).toHaveLength(1);
-    expect(primary.entries.filter((e) => e.resourceType === "StructureDefinition")).toHaveLength(3);
+    // 3 real R4 StructureDefinitions + TestBindingResource (issue #10's
+    // terminology-wiring fixture).
+    expect(primary.entries.filter((e) => e.resourceType === "StructureDefinition")).toHaveLength(4);
   });
 
   it("produces a SchemaSource merge/ can query", async () => {

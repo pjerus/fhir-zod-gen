@@ -1,7 +1,9 @@
 /**
  * Offline: extracts fixtures/packages/test.fhir.mini-1.0.0.tgz (three real
- * R4 StructureDefinitions in the registry's `package/` tarball layout) into
- * a temp dir. No network, no package cache.
+ * R4 StructureDefinitions, plus one synthetic resource + ValueSet/CodeSystem
+ * pair added for issue #10's terminology-wiring end-to-end test, all in the
+ * registry's `package/` tarball layout) into a temp dir. No network, no
+ * package cache.
  */
 
 import { execFileSync } from "node:child_process";
@@ -32,6 +34,7 @@ describe("readPackageIndex", () => {
     const entries = readPackageIndex(packageDir);
     const sds = entries.filter((e) => e.resourceType === "StructureDefinition");
     expect(sds.map((e) => e.url).sort()).toEqual([
+      "http://example.org/fhir/StructureDefinition/TestBindingResource",
       "http://hl7.org/fhir/StructureDefinition/Extension",
       "http://hl7.org/fhir/StructureDefinition/Period",
       "http://hl7.org/fhir/StructureDefinition/patient-birthTime",
