@@ -96,7 +96,8 @@ type TypeExpansion =
 
 type CacheEntry =
   | { state: "creating" }
-  | { state: "created"; elements: Record<string, ResolvedElement> };
+  | { state: "created"; elements: Record<string, ResolvedElement> }
+  | { state: "created-ref"; element: ResolvedElement };
 
 /**
  * Resolve one FHIR Schema document (profile or base resource) to a
@@ -344,14 +345,21 @@ function resolveOneElement(
 /**
  * Resolves an `elementReference` pointer — `[canonicalUrl, "elements",
  * name, ("elements", name)...]` — to the ResolvedElement for the element it
- * points at, so the call site can treat it like a resolved base. Not itself
- * chain-walked or cycle-guarded beyond what recursing into
- * `resolveOneElement` already provides: the one fixture-verified occurrence
- * (Observation.component.referenceRange -> Observation.referenceRange)
- * points at a plain, already-concrete sibling with no `elementReference` of
- * its own, so a dedicated reference-chain cycle guard isn't warranted yet —
- * add one if a fixture ever proves otherwise (this project's fixtures-are-
- * ground-truth rule, see CLAUDE.md).
+ * points at, so the call site can treat it like a resolved base.
+ *
+ * Cycle-guarded the same way `resolveTypeElements` guards type names below:
+ * a "creating"/"created-ref" cache entry keyed by the reference itself,
+ * sharing `cache` (the "elementReference:" prefix keeps it out of the type
+ * name key space, which never contains that string). Not just defensive —
+ * confirmed necessary against real (uncommitted-fixture) data: R4's
+ * `QuestionnaireResponse.item.elements.item` has an `elementReference`
+ * pointing back at `QuestionnaireResponse.elements.item` itself, a genuine
+ * self-reference that stack-overflowed before this guard existed. A cycle
+ * degrades to `undefined` here (the same "not expected from any committed
+ * fixture" fallback resolveOneElement already documents for a element with
+ * no type anywhere), not a distinct `isCyclic` marker — nothing in the
+ * committed fixtures needs the referenced element's structure recovered
+ * further than "stop and don't crash".
  */
 function resolveElementReference(
   ref: string[] | undefined,
@@ -361,6 +369,12 @@ function resolveElementReference(
   if (!ref || ref.length < 3) {
     return undefined;
   }
+  const cacheKey = `elementReference:${ref.join("/")}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached.state === "created-ref" ? cached.element : undefined;
+  }
+
   const [url, ...pathSegments] = ref;
   const targetDoc = source.getByUrl(url);
   if (!targetDoc) {
@@ -385,7 +399,10 @@ function resolveElementReference(
     return undefined;
   }
 
-  return resolveOneElement(targetName, rawTarget, undefined, undefined, source, cache);
+  cache.set(cacheKey, { state: "creating" });
+  const element = resolveOneElement(targetName, rawTarget, undefined, undefined, source, cache);
+  cache.set(cacheKey, { state: "created-ref", element });
+  return element;
 }
 
 /**
@@ -403,7 +420,16 @@ function resolveTypeElements(
 ): TypeExpansion {
   const cached = cache.get(typeName);
   if (cached) {
-    return cached.state === "creating" ? { status: "cyclic" } : { status: "resolved", elements: cached.elements };
+    // A "created-ref" entry never appears under a bare type-name key (see
+    // resolveElementReference's "elementReference:"-prefixed keys) — this
+    // branch is unreachable in practice, but TypeScript can't see that two
+    // disjoint key spaces share one Map, so it's handled explicitly rather
+    // than asserted away.
+    return cached.state === "creating"
+      ? { status: "cyclic" }
+      : cached.state === "created"
+        ? { status: "resolved", elements: cached.elements }
+        : { status: "not-found" };
   }
 
   const typeDoc = source.getByType(typeName);
