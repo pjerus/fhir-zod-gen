@@ -29,9 +29,27 @@
  * is inheritance, not a reset.
  *
  * A profile is expected to only ever *tighten* (e.g. min 0->1), never
- * widen. Nothing here enforces that — merge/ is a resolver, not a profile
- * validator — but no committed fixture violates it, so the simple
- * profile-wins-where-specified rule above is sufficient.
+ * widen. That expectation is now load-bearing, not just aspirational: a
+ * `required` array converted from a StructureDefinition's *differential*
+ * (which is what `@atomic-ehr/fhirschema`'s `translate()` reads — see the
+ * design doc's defect 4) only lists the children THIS layer's differential
+ * newly marks required, not a complete restatement of everything required
+ * so far. Confirmed against real data: `us-core-vital-signs`'s own
+ * `required` is `["category"]` alone — `status`/`code`/`subject`/`effective`
+ * are also required (inherited unchanged from its base `vitalsigns`, whose
+ * own `required` array does list them), but the differential never
+ * restates them because it didn't change them. A layer whose `required`
+ * array is *defined* is therefore not "wholesale authoritative" the way an
+ * earlier version of this comment claimed — the case that claim was
+ * verified against (`uscore-patient` over `r4-patient`) merely never
+ * exercised a base with its own non-empty required list, since
+ * `r4-patient.required` is `undefined`. `resolveOneElement` computes each
+ * child's `required` boolean as `thisLayerSaysRequired || baseAlreadyRequired`
+ * (an OR, never a replace) precisely so that a differential's *silence*
+ * about an already-required field can never read as "not required after
+ * all". Because a valid FHIR profile can only add min (0->1), never remove
+ * it, OR is also the semantically correct merge, not just the one that
+ * happens to match observed data.
  *
  * ## Recursion, cycles, and why Extension is deliberately unexpanded
  *
@@ -78,53 +96,35 @@ type TypeExpansion =
 
 type CacheEntry =
   | { state: "creating" }
-  | { state: "created"; elements: Record<string, ResolvedElement> };
+  | { state: "created"; elements: Record<string, ResolvedElement> }
+  | { state: "created-ref"; element: ResolvedElement };
 
 /**
  * Resolve one FHIR Schema document (profile or base resource) to a
  * ResolvedSchema with every element's type/array/min/max concrete.
  *
- * Throws if `doc` is a profile (`derivation: "constraint"`) whose base
- * can't be resolved through `source` — without the base there is no
- * principled way to fill in the missing type/array/min/max, and silently
- * emitting z.unknown() there is exactly the defect this project exists to
- * fix. Also throws if the base is itself a profile: no committed fixture
- * has a multi-level profile chain (uscore-blood-pressure's base,
- * us-core-vital-signs, would — but that chain's intermediate profiles
- * aren't fetched; see the Phase 2 PR description), so that path is
- * deliberately unimplemented rather than silently wrong.
+ * Walks the base chain recursively: a profile's base may itself be a
+ * profile (`us-core-blood-pressure -> us-core-vital-signs -> vitalsigns ->
+ * Observation` is four levels — 15 of 49 US Core resource profiles hit this
+ * shape, see issue #5). Each layer resolves over the one beneath it,
+ * outermost profile last, until a document with `derivation` other than
+ * `"constraint"` (a true base resource/type) terminates the walk.
+ *
+ * Throws if `doc` (or any profile in its base chain) declares no base, or
+ * if a base URL can't be resolved through `source` — without the base
+ * there is no principled way to fill in the missing type/array/min/max, and
+ * silently emitting z.unknown() there is exactly the defect this project
+ * exists to fix. Also throws if the base chain is circular (A's base is B,
+ * B's base is A, or a node reaches itself transitively) — that's malformed
+ * input, not a case to walk forever or blow the stack on. This is a
+ * document/URL-level cycle guard, a different axis from `resolveTypeElements`'s
+ * type-name cache below: that one guards datatype recursion (Reference ->
+ * Identifier -> Reference); this one guards the base-resource axis, and a
+ * malformed base chain doesn't imply a malformed type graph or vice versa.
  */
 export function resolveDocument(doc: FhirSchemaDocument, source: SchemaSource): ResolvedSchema {
   const cache = new Map<string, CacheEntry>();
-
-  let resolvedBaseElements: Record<string, ResolvedElement> | undefined;
-  let effectiveRequired = doc.required;
-
-  if (doc.derivation === "constraint") {
-    if (!doc.base) {
-      throw new Error(
-        `resolveDocument: "${doc.url}" is a profile (derivation: "constraint") but declares no base — ` +
-          `there is nothing to resolve its narrowed elements against.`
-      );
-    }
-    const baseDoc = source.getByUrl(doc.base);
-    if (!baseDoc) {
-      throw new Error(
-        `resolveDocument: base "${doc.base}" for profile "${doc.url}" was not found via SchemaSource.getByUrl. ` +
-          `A profile's concrete type/array/min/max live on its base — inject a SchemaSource that has it.`
-      );
-    }
-    if (baseDoc.derivation === "constraint") {
-      throw new Error(
-        `resolveDocument: "${doc.url}"'s base "${baseDoc.url}" is itself a profile (derivation: "constraint"). ` +
-          `Multi-level profile chains are not supported yet — no committed fixture exercises one.`
-      );
-    }
-    resolvedBaseElements = resolveElementMap(baseDoc.elements ?? {}, undefined, baseDoc.required, source, cache);
-    effectiveRequired = doc.required ?? baseDoc.required;
-  }
-
-  const elements = resolveElementMap(doc.elements ?? {}, resolvedBaseElements, effectiveRequired, source, cache);
+  const { elements } = resolveDocumentOverBaseChain(doc, new Set<string>(), source, cache);
 
   return {
     name: doc.name,
@@ -134,6 +134,68 @@ export function resolveDocument(doc: FhirSchemaDocument, source: SchemaSource): 
     base: doc.base,
     derivation: doc.derivation,
     elements,
+  };
+}
+
+/**
+ * Resolves `doc` over its full base chain (recursing until a non-profile
+ * document terminates it), returning both the resolved elements and the
+ * `required` array that was used to resolve `doc`'s own direct children —
+ * the latter is only consumed by the caller one level up, to seed its own
+ * `doc.required ?? ...` fallback; each individual child's `required`
+ * *boolean* is what actually carries requiredness upward (see
+ * resolveOneElement's OR-merge), not this array.
+ *
+ * `visitedUrls` accumulates every document URL already on the current
+ * walk-up path (including `doc.url` itself, added before recursing into
+ * its base) — revisiting any of them is a cycle.
+ */
+function resolveDocumentOverBaseChain(
+  doc: FhirSchemaDocument,
+  visitedUrls: Set<string>,
+  source: SchemaSource,
+  cache: Map<string, CacheEntry>
+): { elements: Record<string, ResolvedElement>; required: string[] | undefined } {
+  if (visitedUrls.has(doc.url)) {
+    const chain = [...visitedUrls, doc.url].join(" -> ");
+    throw new Error(
+      `resolveDocument: circular base chain detected — "${doc.url}" is reached again while walking up ` +
+        `its own base chain (${chain}). A profile's base chain must terminate at a base resource/type, ` +
+        `not loop back on itself.`
+    );
+  }
+  const nextVisitedUrls = new Set(visitedUrls);
+  nextVisitedUrls.add(doc.url);
+
+  if (doc.derivation !== "constraint") {
+    // True base resource/type: nothing to merge over, its own elements are
+    // already self-sufficient.
+    return {
+      elements: resolveElementMap(doc.elements ?? {}, undefined, doc.required, source, cache),
+      required: doc.required,
+    };
+  }
+
+  if (!doc.base) {
+    throw new Error(
+      `resolveDocument: "${doc.url}" is a profile (derivation: "constraint") but declares no base — ` +
+        `there is nothing to resolve its narrowed elements against.`
+    );
+  }
+  const baseDoc = source.getByUrl(doc.base);
+  if (!baseDoc) {
+    throw new Error(
+      `resolveDocument: base "${doc.base}" for profile "${doc.url}" was not found via SchemaSource.getByUrl. ` +
+        `A profile's concrete type/array/min/max live on its base — inject a SchemaSource that has it.`
+    );
+  }
+
+  const baseResolved = resolveDocumentOverBaseChain(baseDoc, nextVisitedUrls, source, cache);
+  const effectiveRequired = doc.required ?? baseResolved.required;
+
+  return {
+    elements: resolveElementMap(doc.elements ?? {}, baseResolved.elements, effectiveRequired, source, cache),
+    required: effectiveRequired,
   };
 }
 
@@ -175,14 +237,33 @@ function resolveOneElement(
   source: SchemaSource,
   cache: Map<string, CacheEntry>
 ): ResolvedElement {
-  const type = rawEl?.type ?? resolvedBase?.type;
-  const array = rawEl?.array ?? resolvedBase?.array ?? false;
-  const min = rawEl?.min ?? resolvedBase?.min ?? 0;
-  const max = rawEl?.max ?? resolvedBase?.max;
-  // `requiredNames` undefined means THIS layer doesn't restate the parent's
-  // required list — inherit whatever the base already resolved this child
-  // to. A defined array (even []) is authoritative: profile wins wholesale.
-  const required = requiredNames ? requiredNames.includes(name) : (resolvedBase?.required ?? false);
+  // `elementReference` (first observed in fixtures/observation.fhirschema.json:
+  // Observation.component.referenceRange points at Observation.referenceRange
+  // rather than repeating its structure) is @atomic-ehr/fhirschema's way of
+  // deduplicating an element that's structurally identical to another one
+  // elsewhere in the SAME document. Treat the referenced element exactly
+  // like a resolved base — its type/array/min/max/elements fill in wherever
+  // this element doesn't specify its own (this element's own `short` etc.
+  // still win; component-level referenceRange has different `short` text
+  // than the top-level one it points at). Only consulted when there's no
+  // profile-chain `resolvedBase` already, since the two mechanisms haven't
+  // been observed to co-occur on one element.
+  const effectiveBase = resolvedBase ?? resolveElementReference(rawEl?.elementReference, source, cache);
+
+  const type = rawEl?.type ?? effectiveBase?.type;
+  const array = rawEl?.array ?? effectiveBase?.array ?? false;
+  const min = rawEl?.min ?? effectiveBase?.min ?? 0;
+  const max = rawEl?.max ?? effectiveBase?.max;
+  // OR, not replace: `requiredNames` is converted from a differential, so
+  // it only lists names THIS layer's differential newly marks required —
+  // silence about a name doesn't mean "not required", it means "unchanged
+  // from base". A name already required in `effectiveBase` (accumulated from
+  // every layer beneath this one) must stay required regardless of whether
+  // this layer's own list happens to restate it — see the module comment's
+  // `us-core-vital-signs` example. A layer can only ever ADD requiredness
+  // this way, never remove it, which matches FHIR's own narrowing-only rule
+  // for profiles.
+  const required = (requiredNames?.includes(name) ?? false) || (effectiveBase?.required ?? false);
 
   const resolved: ResolvedElement = {
     type: type ?? "unknown",
@@ -190,15 +271,15 @@ function resolveOneElement(
     min,
     max,
     required,
-    binding: rawEl?.binding ?? resolvedBase?.binding,
-    constraint: rawEl?.constraint ?? resolvedBase?.constraint,
-    choices: rawEl?.choices ?? resolvedBase?.choices,
-    choiceOf: rawEl?.choiceOf ?? resolvedBase?.choiceOf,
-    mustSupport: rawEl?.mustSupport ?? resolvedBase?.mustSupport,
-    short: rawEl?.short ?? resolvedBase?.short,
-    refers: rawEl?.refers ?? resolvedBase?.refers,
-    slicing: rawEl?.slicing ?? resolvedBase?.slicing,
-    extensions: rawEl?.extensions ?? resolvedBase?.extensions,
+    binding: rawEl?.binding ?? effectiveBase?.binding,
+    constraint: rawEl?.constraint ?? effectiveBase?.constraint,
+    choices: rawEl?.choices ?? effectiveBase?.choices,
+    choiceOf: rawEl?.choiceOf ?? effectiveBase?.choiceOf,
+    mustSupport: rawEl?.mustSupport ?? effectiveBase?.mustSupport,
+    short: rawEl?.short ?? effectiveBase?.short,
+    refers: rawEl?.refers ?? effectiveBase?.refers,
+    slicing: rawEl?.slicing ?? effectiveBase?.slicing,
+    extensions: rawEl?.extensions ?? effectiveBase?.extensions,
   };
 
   if (!type) {
@@ -210,9 +291,9 @@ function resolveOneElement(
     return resolved;
   }
 
-  let childResolvedBase = resolvedBase?.elements;
+  let childResolvedBase = effectiveBase?.elements;
 
-  if (!rawEl?.type && resolvedBase?.isCyclic) {
+  if (!rawEl?.type && effectiveBase?.isCyclic) {
     // This exact node was already determined to be a cyclic dead-end when
     // its base was resolved (e.g. it's Reference.identifier reached again
     // through a later profile layer's overlay), and this layer doesn't
@@ -262,6 +343,69 @@ function resolveOneElement(
 }
 
 /**
+ * Resolves an `elementReference` pointer — `[canonicalUrl, "elements",
+ * name, ("elements", name)...]` — to the ResolvedElement for the element it
+ * points at, so the call site can treat it like a resolved base.
+ *
+ * Cycle-guarded the same way `resolveTypeElements` guards type names below:
+ * a "creating"/"created-ref" cache entry keyed by the reference itself,
+ * sharing `cache` (the "elementReference:" prefix keeps it out of the type
+ * name key space, which never contains that string). Not just defensive —
+ * confirmed necessary against real (uncommitted-fixture) data: R4's
+ * `QuestionnaireResponse.item.elements.item` has an `elementReference`
+ * pointing back at `QuestionnaireResponse.elements.item` itself, a genuine
+ * self-reference that stack-overflowed before this guard existed. A cycle
+ * degrades to `undefined` here (the same "not expected from any committed
+ * fixture" fallback resolveOneElement already documents for a element with
+ * no type anywhere), not a distinct `isCyclic` marker — nothing in the
+ * committed fixtures needs the referenced element's structure recovered
+ * further than "stop and don't crash".
+ */
+function resolveElementReference(
+  ref: string[] | undefined,
+  source: SchemaSource,
+  cache: Map<string, CacheEntry>
+): ResolvedElement | undefined {
+  if (!ref || ref.length < 3) {
+    return undefined;
+  }
+  const cacheKey = `elementReference:${ref.join("/")}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached.state === "created-ref" ? cached.element : undefined;
+  }
+
+  const [url, ...pathSegments] = ref;
+  const targetDoc = source.getByUrl(url);
+  if (!targetDoc) {
+    return undefined;
+  }
+
+  let elements: Record<string, FhirSchemaElement> | undefined = targetDoc.elements;
+  let targetName = "";
+  let rawTarget: FhirSchemaElement | undefined;
+  for (let i = 0; i < pathSegments.length; i += 2) {
+    if (pathSegments[i] !== "elements" || !elements) {
+      return undefined;
+    }
+    targetName = pathSegments[i + 1];
+    rawTarget = elements[targetName];
+    if (!rawTarget) {
+      return undefined;
+    }
+    elements = rawTarget.elements;
+  }
+  if (!rawTarget) {
+    return undefined;
+  }
+
+  cache.set(cacheKey, { state: "creating" });
+  const element = resolveOneElement(targetName, rawTarget, undefined, undefined, source, cache);
+  cache.set(cacheKey, { state: "created-ref", element });
+  return element;
+}
+
+/**
  * Resolve a named complex type's own elements via SchemaSource, cached and
  * cycle-guarded by type name. Datatype documents (HumanName, Identifier,
  * ...) are themselves specializations with fully concrete elements already
@@ -276,7 +420,16 @@ function resolveTypeElements(
 ): TypeExpansion {
   const cached = cache.get(typeName);
   if (cached) {
-    return cached.state === "creating" ? { status: "cyclic" } : { status: "resolved", elements: cached.elements };
+    // A "created-ref" entry never appears under a bare type-name key (see
+    // resolveElementReference's "elementReference:"-prefixed keys) — this
+    // branch is unreachable in practice, but TypeScript can't see that two
+    // disjoint key spaces share one Map, so it's handled explicitly rather
+    // than asserted away.
+    return cached.state === "creating"
+      ? { status: "cyclic" }
+      : cached.state === "created"
+        ? { status: "resolved", elements: cached.elements }
+        : { status: "not-found" };
   }
 
   const typeDoc = source.getByType(typeName);

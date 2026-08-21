@@ -241,11 +241,22 @@ export interface FhirSchemaElement {
   _required?: boolean;
   /**
    * Declared in @atomic-ehr/fhirschema's dist/types.d.ts but not observed in
-   * any of the three committed fixtures. Documented here for completeness,
+   * any of the committed fixtures. Documented here for completeness,
    * not fixture-verified — confirm against real output before relying on it.
    */
   excluded?: string[];
-  /** Same caveat as `excluded` — declared upstream, not observed here. */
+  /**
+   * Confirmed by fixtures/observation.fhirschema.json (issue #5's base
+   * chain): `Observation.component.referenceRange.elementReference` is
+   * `["http://hl7.org/fhir/StructureDefinition/Observation", "elements",
+   * "referenceRange"]` — the converter's way of pointing at a structurally
+   * identical element elsewhere in the SAME document instead of repeating
+   * it. Shape is `[canonicalUrl, "elements", name, ("elements", name)...]`,
+   * alternating the literal string "elements" with a child name, walkable
+   * from the target document's own `elements` map. See
+   * merge/resolve.ts's `resolveElementReference`, which treats the
+   * referenced element like a resolved base.
+   */
   elementReference?: string[];
 }
 

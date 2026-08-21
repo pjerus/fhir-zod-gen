@@ -42,7 +42,16 @@ export class FixtureSchemaSource implements SchemaSource {
 export function loadFixtureSchemaSource(fixturesDir: string): FixtureSchemaSource {
   const documents: FhirSchemaDocument[] = [];
 
-  const topLevel = ["r4-patient.fhirschema.json", "uscore-patient.fhirschema.json", "uscore-blood-pressure.fhirschema.json"];
+  const topLevel = [
+    "r4-patient.fhirschema.json",
+    "uscore-patient.fhirschema.json",
+    "uscore-blood-pressure.fhirschema.json",
+    // Issue #5's multi-level base chain: us-core-blood-pressure ->
+    // us-core-vital-signs -> vitalsigns -> observation.
+    "uscore-vital-signs.fhirschema.json",
+    "vitalsigns.fhirschema.json",
+    "observation.fhirschema.json",
+  ];
   for (const fileName of topLevel) {
     documents.push(readDocument(join(fixturesDir, fileName)));
   }
