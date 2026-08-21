@@ -16,10 +16,16 @@
  * the element's own), so this module's only job is turning already-correct
  * data into readable source text.
  *
+ * Phase 3b update: defect 2 (ValueSet expansion -> z.enum) is now handled
+ * here, via an optional injected terminology/TerminologySource (see
+ * EmitOptions). A required-strength binding whose ValueSet successfully
+ * expands emits z.enum([...]); everything else (no source configured,
+ * extensible/preferred/example strength, expansion failure) stays
+ * primitiveToZod(el.type) with a loud TODO marker — see elementToZod's
+ * binding branch.
+ *
  * Explicitly NOT this module's job (see the design doc's Phase 3 sub-phases
  * and this PR's description for the split):
- *   - defect 2 / ValueSet expansion -> z.enum (phase 3b) — required-strength
- *     bindings stay plain z.string() here, same as pre-Phase-2.
  *   - choice types (value[x] flattening + mutual-exclusivity refine, 3c) —
  *     a choice-type group marker (ResolvedElement.choices set, no concrete
  *     type of its own) emits z.unknown() with a TODO; its variant elements
@@ -34,6 +40,7 @@
 
 import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
 import { FHIR_PRIMITIVE_TYPES } from "../fhir-schema-types.js";
+import { expandValueSet, type TerminologySource } from "../terminology/index.js";
 
 const PRIMITIVE_TYPES = new Set<string>(FHIR_PRIMITIVE_TYPES);
 
@@ -96,10 +103,12 @@ function escapeForBlockComment(text: string): string {
 
 interface EmitContext {
   warnings: string[];
+  terminology?: TerminologySource;
 }
 
 function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, indent: string): string {
   let expr: string;
+  let bindingTodo: string | undefined;
 
   if (el.isCyclic) {
     // Cut short by merge/'s cycle guard (e.g. Identifier -> Reference ->
@@ -110,6 +119,29 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     // silently under-validate).
     ctx.warnings.push(`Element "${name}" is a cyclic reference (type "${el.type}") — z.lazy() cycle support not implemented yet.`);
     expr = "z.unknown() /* TODO(defect 5): cyclic reference — z.lazy() cycle emission not implemented yet */";
+  } else if (el.binding?.strength === "required" && el.binding.valueSet && PRIMITIVE_TYPES.has(el.type)) {
+    // Defect 2. ONLY strength:"required" reaches here — see this function's
+    // caller comment and the design doc's conformance rule: extensible/
+    // preferred/example bindings permit out-of-valueset values, so an enum
+    // would reject conformant data. Restricted to primitive-typed elements
+    // (e.g. "code") — a required binding on a complex type like
+    // CodeableConcept isn't a single string value and doesn't belong here.
+    const expansion = ctx.terminology
+      ? expandValueSet(el.binding.valueSet, ctx.terminology)
+      : { ok: false as const, reason: "no terminology source configured" };
+
+    if (expansion.ok) {
+      expr = `z.enum([${expansion.codes.map((code) => JSON.stringify(code)).join(", ")}])`;
+    } else {
+      // Never a partial enum (design doc section 7, "REJECT/DO BETTER #4") —
+      // fall back to the plain primitive mapping, with a loud marker instead
+      // of a silent gap.
+      ctx.warnings.push(
+        `Element "${name}" has a required binding to "${el.binding.valueSet}" that could not be expanded (${expansion.reason}) — falling back to ${primitiveToZod(el.type)}.`
+      );
+      expr = primitiveToZod(el.type);
+      bindingTodo = `/* TODO(defect 2): required binding "${el.binding.valueSet}" could not be expanded — ${escapeForBlockComment(expansion.reason)} */`;
+    }
   } else if (el.elements && Object.keys(el.elements).length > 0) {
     // Resolved structure — a BackboneElement, or a complex type merge/
     // expanded via SchemaSource (e.g. HumanName, Identifier). Works
@@ -163,6 +195,10 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     }
   }
 
+  if (bindingTodo) {
+    expr += ` ${bindingTodo}`;
+  }
+
   return expr;
 }
 
@@ -188,13 +224,27 @@ export interface EmitResult {
   warnings: string[];
 }
 
+export interface EmitOptions {
+  /**
+   * Optional ValueSet/CodeSystem lookup for expanding required-strength
+   * bindings into z.enum(...) (defect 2). Omitting it is a valid, fully
+   * supported configuration — every required binding then degrades to its
+   * plain primitive mapping with a TODO(defect 2) marker, same as if
+   * expansion had failed. emit/ still does no I/O itself; the caller (e.g.
+   * defects.test.ts, generate.ts) constructs the source, typically via
+   * terminology/fixture-terminology-source.ts today or a package-backed one
+   * in Phase 4.
+   */
+  terminology?: TerminologySource;
+}
+
 /**
  * Emit a single .ts file (Zod schema + inferred type) for one resolved FHIR
  * Schema document (one profile or base resource, already merged with its
  * base — see src/merge/).
  */
-export function emitDocument(schema: ResolvedSchema): EmitResult {
-  const ctx: EmitContext = { warnings: [] };
+export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}): EmitResult {
+  const ctx: EmitContext = { warnings: [], terminology: options.terminology };
   const constName = `${schema.name}Schema`;
   const typeName = schema.name;
 

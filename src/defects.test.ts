@@ -24,12 +24,14 @@
  * how we resolve or emit it. Assertions about generated *output* now go
  * through resolveDocument first.
  *
- * Defect 2 (ValueSet expansion -> z.enum) and the cross-file-import half of
- * defect 5 remain unimplemented by design — later sub-phases (3b, and the
- * rest of 5) — so they stay it.fails(). Defects 1/3/4 are genuinely fixed by
- * consuming ResolvedSchema, so those are flipped. Defect 5's "output does
- * not compile" consequence is also fixed — see that test's comment for why
- * it's flipped even though full cross-file resolution isn't.
+ * Defect 2 (ValueSet expansion -> z.enum) is fixed as of Phase 3b — a
+ * required-strength binding whose ValueSet is committed under
+ * fixtures/valuesets/ now expands to a real z.enum(...). The cross-file-import
+ * half of defect 5 remains unimplemented by design (the rest of Phase 3) —
+ * that one stays it.fails(). Defects 1/3/4 are genuinely fixed by consuming
+ * ResolvedSchema, so those are flipped. Defect 5's "output does not compile"
+ * consequence is also fixed — see that test's comment for why it's flipped
+ * even though full cross-file resolution isn't.
  */
 
 import { describe, it, expect } from "vitest";
@@ -39,10 +41,12 @@ import { dirname, join } from "node:path";
 import { resolveDocument } from "./merge/resolve.js";
 import { loadFixtureSchemaSource } from "./merge/fixture-schema-source.js";
 import { emitDocument } from "./emit/index.js";
+import { loadFixtureTerminologySource } from "./terminology/index.js";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const source = loadFixtureSchemaSource(FIXTURES_DIR);
+const terminology = loadFixtureTerminologySource(FIXTURES_DIR);
 
 function loadFixture(name: string): FhirSchemaDocument {
   return JSON.parse(readFileSync(join(FIXTURES_DIR, name), "utf-8")) as FhirSchemaDocument;
@@ -50,7 +54,7 @@ function loadFixture(name: string): FhirSchemaDocument {
 
 function emitFixture(name: string): string {
   const resolved = resolveDocument(loadFixture(name), source);
-  return emitDocument(resolved).source;
+  return emitDocument(resolved, { terminology }).source;
 }
 
 /**
@@ -89,16 +93,16 @@ describe("verified defects (design doc section 1)", () => {
     }
   );
 
-  it.fails(
-    "defect 2: `binding.codes` never exists on real bindings (only {strength, valueSet, bindingName}) — " +
-      "required-strength gender never becomes a z.enum, even though the ValueSet it references is " +
-      "committed and expandable at fixtures/valuesets/ValueSet-administrative-gender.json. ValueSet " +
-      "expansion is phase 3b, not this phase — still unimplemented.",
+  it(
+    "defect 2 (FIXED): `binding.codes` never exists on real bindings (only {strength, valueSet, bindingName}) — " +
+      "required-strength gender now becomes a real z.enum by expanding the ValueSet it references, " +
+      "committed and expandable at fixtures/valuesets/ValueSet-administrative-gender.json",
     () => {
       const doc = loadFixture("uscore-patient.fhirschema.json");
       expect(doc.elements.gender?.binding).not.toHaveProperty("codes"); // ground truth
       const generated = emitFixture("uscore-patient.fhirschema.json");
       expect(extractField(generated, "gender")).toMatch(/^z\.enum\(/);
+      expect(extractField(generated, "gender")).toContain('z.enum(["male", "female", "other", "unknown"])');
     }
   );
 
