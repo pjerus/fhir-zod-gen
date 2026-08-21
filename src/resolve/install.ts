@@ -31,11 +31,31 @@
  *     package's own `package.json` `dependencies`, not from the installer's
  *     dependency resolution, so what feeds the SchemaSource is exactly what
  *     the IG declares.
+ *
+ * ## `skipTerminology` (issue #9)
+ *
+ * The default path above is unchanged: one `installer.install(specString)`
+ * call, which cascades through the installer's own dependency resolution and
+ * downloads everything, then this module re-walks the now-on-disk
+ * `package.json` files to index them. `install()` has no public option to
+ * exclude specific dependencies from that cascade — so skipping a
+ * terminology-only package's ~100s of MB for real (not just from the index)
+ * means never calling `install()` on the primary at all when the flag is
+ * set. Instead `installClosureSkippingTerminology` walks the closure itself
+ * via closure.ts's registry-metadata-only walker (pruning terminology-only
+ * dependencies out of the walk before they're ever enqueued) and downloads
+ * each accepted, not-yet-cached package individually with
+ * `downloadPackage()` — the one public API that materializes a single
+ * package without cascading into its dependencies. The trade-off: this path
+ * loses `install()`'s cross-process disk locking during concurrent installs
+ * of the same package. Acceptable for a single-user CLI invocation; not
+ * something the default (far more common) path takes on.
  */
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { FhirPackageInstaller } from "fhir-package-installer";
+import { isKnownTerminologyPackage, walkDependencyClosure, type ClosureNode } from "./closure.js";
 import { readPackageIndex, readPackageManifest } from "./package-index.js";
 import type { LoadedPackage } from "./package-schema-source.js";
 import { formatPackageSpec, type PackageSpec } from "./package-spec.js";
@@ -47,6 +67,14 @@ export interface InstallOptions {
   registryUrl?: string;
   onLog?: (message: string) => void;
   onWarn?: (message: string) => void;
+  /**
+   * Omit terminology-only dependencies (closure.ts's isKnownTerminologyPackage)
+   * from the closure entirely — not downloaded, not indexed. A required
+   * binding then degrades to z.string() plus the existing TODO(defect 2)
+   * marker (the same fallback that already fires when a binding's ValueSet
+   * simply can't be found) instead of expanding to z.enum. Issue #9.
+   */
+  skipTerminology?: boolean;
 }
 
 export interface InstalledClosure {
@@ -80,14 +108,57 @@ export async function installPackageClosure(
   });
 
   const specString = formatPackageSpec(spec);
+  const primaryId = await installer.toPackageObject(specString);
+
+  if (options.skipTerminology) {
+    return await installClosureSkippingTerminology(installer, primaryId, log, warn);
+  }
+
   log(`Installing ${specString} and its dependencies (cache: ${installer.getCachePath()}) ...`);
   await installer.install(specString);
 
-  const primaryId = await installer.toPackageObject(specString);
+  return await readClosureFromDisk(installer, primaryId, warn);
+}
 
+async function installClosureSkippingTerminology(
+  installer: FhirPackageInstaller,
+  primary: ClosureNode,
+  log: (message: string) => void,
+  warn: (message: string) => void
+): Promise<InstalledClosure> {
+  log(
+    `Resolving ${formatPackageSpec(primary)}'s dependency closure (cache: ${installer.getCachePath()}), ` +
+      `skipping terminology-only dependencies (--skip-terminology) ...`
+  );
+  const nodes = await walkDependencyClosure(installer, primary, { excludeDependency: isKnownTerminologyPackage });
+  const allowed = new Set(nodes.map((n) => `${n.id}#${n.version}`));
+
+  for (const node of nodes) {
+    if (await installer.isInstalled(node, { deep: false })) continue;
+    log(`Downloading ${formatPackageSpec(node)} ...`);
+    await installer.downloadPackage(node, { destination: installer.getCachePath(), extract: true });
+  }
+
+  return await readClosureFromDisk(installer, primary, warn, allowed);
+}
+
+/**
+ * Re-walks a closure already on disk (or partially on disk) from each
+ * package's own `package.json` `dependencies`, indexing every package that
+ * is actually present. `allowed`, when given, silently drops any dependency
+ * outside that set instead of warning about it being missing — used by the
+ * skip-terminology path, where a skipped dependency is expected to be
+ * absent, not a sign something went wrong.
+ */
+async function readClosureFromDisk(
+  installer: FhirPackageInstaller,
+  primary: ClosureNode,
+  warn: (message: string) => void,
+  allowed?: Set<string>
+): Promise<InstalledClosure> {
   const packages: LoadedPackage[] = [];
   const seen = new Set<string>();
-  const queue: { id: string; version: string }[] = [{ id: primaryId.id, version: primaryId.version }];
+  const queue: ClosureNode[] = [primary];
 
   while (queue.length > 0) {
     const next = queue.shift();
@@ -95,6 +166,7 @@ export async function installPackageClosure(
     const key = `${next.id}#${next.version}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    if (allowed && !allowed.has(key)) continue;
 
     const dir = await installer.getPackageDirPath(next);
     const packageDir = existsSync(join(dir, "package")) ? join(dir, "package") : dir;
@@ -120,7 +192,9 @@ export async function installPackageClosure(
     }
   }
 
-  const primary = packages[0];
-  if (!primary) throw new Error(`Could not load ${specString} from the package cache.`);
-  return { primary, packages };
+  const primaryLoaded = packages[0];
+  if (!primaryLoaded) {
+    throw new Error(`Could not load ${formatPackageSpec(primary)} from the package cache.`);
+  }
+  return { primary: primaryLoaded, packages };
 }
