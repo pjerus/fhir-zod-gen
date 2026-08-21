@@ -1,0 +1,57 @@
+{
+  "name": "Annotation",
+  "type": "Annotation",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Annotation",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Annotation Type: A  text note which also  contains information about who made the statement and when.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "author": {
+      "short": "Individual responsible for the annotation",
+      "isSummary": true,
+      "choices": [
+        "authorReference",
+        "authorString"
+      ],
+      "index": 1
+    },
+    "authorReference": {
+      "short": "Individual responsible for the annotation",
+      "type": "Reference",
+      "isSummary": true,
+      "choiceOf": "author",
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Organization",
+        "http://hl7.org/fhir/StructureDefinition/Patient",
+        "http://hl7.org/fhir/StructureDefinition/Practitioner",
+        "http://hl7.org/fhir/StructureDefinition/RelatedPerson"
+      ],
+      "index": 2
+    },
+    "authorString": {
+      "short": "Individual responsible for the annotation",
+      "type": "string",
+      "isSummary": true,
+      "choiceOf": "author",
+      "index": 3
+    },
+    "time": {
+      "short": "When the annotation was made",
+      "type": "dateTime",
+      "isSummary": true,
+      "index": 4
+    },
+    "text": {
+      "short": "The annotation  - text content (as markdown)",
+      "type": "markdown",
+      "isSummary": true,
+      "index": 5
+    }
+  },
+  "required": [
+    "text"
+  ]
+}

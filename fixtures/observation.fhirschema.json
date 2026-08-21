@@ -1,0 +1,571 @@
+{
+  "name": "Observation",
+  "type": "Observation",
+  "kind": "resource",
+  "class": "resource",
+  "url": "http://hl7.org/fhir/StructureDefinition/Observation",
+  "version": "4.0.1",
+  "description": "Measurements and simple assertions made about a patient, device or other subject.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/DomainResource",
+  "elements": {
+    "identifier": {
+      "short": "Business Identifier for observation",
+      "type": "Identifier",
+      "isSummary": true,
+      "array": true,
+      "index": 0
+    },
+    "basedOn": {
+      "short": "Fulfills plan, proposal or order",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/CarePlan",
+        "http://hl7.org/fhir/StructureDefinition/DeviceRequest",
+        "http://hl7.org/fhir/StructureDefinition/ImmunizationRecommendation",
+        "http://hl7.org/fhir/StructureDefinition/MedicationRequest",
+        "http://hl7.org/fhir/StructureDefinition/NutritionOrder",
+        "http://hl7.org/fhir/StructureDefinition/ServiceRequest"
+      ],
+      "array": true,
+      "index": 1
+    },
+    "partOf": {
+      "short": "Part of referenced event",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/ImagingStudy",
+        "http://hl7.org/fhir/StructureDefinition/Immunization",
+        "http://hl7.org/fhir/StructureDefinition/MedicationAdministration",
+        "http://hl7.org/fhir/StructureDefinition/MedicationDispense",
+        "http://hl7.org/fhir/StructureDefinition/MedicationStatement",
+        "http://hl7.org/fhir/StructureDefinition/Procedure"
+      ],
+      "array": true,
+      "index": 2
+    },
+    "status": {
+      "short": "registered | preliminary | final | amended +",
+      "type": "code",
+      "isModifier": true,
+      "isModifierReason": "This element is labeled as a modifier because it is a status element that contains status entered-in-error which means that the resource should not be treated as valid",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/observation-status|4.0.1",
+        "bindingName": "ObservationStatus"
+      },
+      "index": 3
+    },
+    "category": {
+      "short": "Classification of  type of observation",
+      "type": "CodeableConcept",
+      "binding": {
+        "strength": "preferred",
+        "valueSet": "http://hl7.org/fhir/ValueSet/observation-category",
+        "bindingName": "ObservationCategory"
+      },
+      "array": true,
+      "index": 4
+    },
+    "code": {
+      "short": "Type of observation (code / type)",
+      "type": "CodeableConcept",
+      "isSummary": true,
+      "binding": {
+        "strength": "example",
+        "valueSet": "http://hl7.org/fhir/ValueSet/observation-codes",
+        "bindingName": "ObservationCode"
+      },
+      "index": 5
+    },
+    "subject": {
+      "short": "Who and/or what the observation is about",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Device",
+        "http://hl7.org/fhir/StructureDefinition/Group",
+        "http://hl7.org/fhir/StructureDefinition/Location",
+        "http://hl7.org/fhir/StructureDefinition/Patient"
+      ],
+      "index": 6
+    },
+    "focus": {
+      "short": "What the observation is about, when it is not about the subject of record",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Resource"
+      ],
+      "array": true,
+      "index": 7
+    },
+    "encounter": {
+      "short": "Healthcare event during which this observation is made",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Encounter"
+      ],
+      "index": 8
+    },
+    "effective": {
+      "short": "Clinically relevant time/time-period for observation",
+      "isSummary": true,
+      "choices": [
+        "effectiveDateTime",
+        "effectivePeriod",
+        "effectiveTiming",
+        "effectiveInstant"
+      ],
+      "index": 10
+    },
+    "effectiveDateTime": {
+      "short": "Clinically relevant time/time-period for observation",
+      "type": "dateTime",
+      "isSummary": true,
+      "choiceOf": "effective",
+      "index": 11
+    },
+    "effectivePeriod": {
+      "short": "Clinically relevant time/time-period for observation",
+      "type": "Period",
+      "isSummary": true,
+      "choiceOf": "effective",
+      "index": 12
+    },
+    "effectiveTiming": {
+      "short": "Clinically relevant time/time-period for observation",
+      "type": "Timing",
+      "isSummary": true,
+      "choiceOf": "effective",
+      "index": 13
+    },
+    "effectiveInstant": {
+      "short": "Clinically relevant time/time-period for observation",
+      "type": "instant",
+      "isSummary": true,
+      "choiceOf": "effective",
+      "index": 14
+    },
+    "issued": {
+      "short": "Date/Time this version was made available",
+      "type": "instant",
+      "isSummary": true,
+      "index": 15
+    },
+    "performer": {
+      "short": "Who is responsible for the observation",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/CareTeam",
+        "http://hl7.org/fhir/StructureDefinition/Organization",
+        "http://hl7.org/fhir/StructureDefinition/Patient",
+        "http://hl7.org/fhir/StructureDefinition/Practitioner",
+        "http://hl7.org/fhir/StructureDefinition/PractitionerRole",
+        "http://hl7.org/fhir/StructureDefinition/RelatedPerson"
+      ],
+      "array": true,
+      "index": 16
+    },
+    "value": {
+      "short": "Actual result",
+      "isSummary": true,
+      "choices": [
+        "valueQuantity",
+        "valueCodeableConcept",
+        "valueString",
+        "valueBoolean",
+        "valueInteger",
+        "valueRange",
+        "valueRatio",
+        "valueSampledData",
+        "valueTime",
+        "valueDateTime",
+        "valuePeriod"
+      ],
+      "index": 18
+    },
+    "valueQuantity": {
+      "short": "Actual result",
+      "type": "Quantity",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 19
+    },
+    "valueCodeableConcept": {
+      "short": "Actual result",
+      "type": "CodeableConcept",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 20
+    },
+    "valueString": {
+      "short": "Actual result",
+      "type": "string",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 21
+    },
+    "valueBoolean": {
+      "short": "Actual result",
+      "type": "boolean",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 22
+    },
+    "valueInteger": {
+      "short": "Actual result",
+      "type": "integer",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 23
+    },
+    "valueRange": {
+      "short": "Actual result",
+      "type": "Range",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 24
+    },
+    "valueRatio": {
+      "short": "Actual result",
+      "type": "Ratio",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 25
+    },
+    "valueSampledData": {
+      "short": "Actual result",
+      "type": "SampledData",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 26
+    },
+    "valueTime": {
+      "short": "Actual result",
+      "type": "time",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 27
+    },
+    "valueDateTime": {
+      "short": "Actual result",
+      "type": "dateTime",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 28
+    },
+    "valuePeriod": {
+      "short": "Actual result",
+      "type": "Period",
+      "isSummary": true,
+      "choiceOf": "value",
+      "index": 29
+    },
+    "dataAbsentReason": {
+      "short": "Why the result is missing",
+      "type": "CodeableConcept",
+      "binding": {
+        "strength": "extensible",
+        "valueSet": "http://hl7.org/fhir/ValueSet/data-absent-reason",
+        "bindingName": "ObservationValueAbsentReason"
+      },
+      "index": 30
+    },
+    "interpretation": {
+      "short": "High, low, normal, etc.",
+      "type": "CodeableConcept",
+      "binding": {
+        "strength": "extensible",
+        "valueSet": "http://hl7.org/fhir/ValueSet/observation-interpretation",
+        "bindingName": "ObservationInterpretation"
+      },
+      "array": true,
+      "index": 31
+    },
+    "note": {
+      "short": "Comments about the observation",
+      "type": "Annotation",
+      "array": true,
+      "index": 32
+    },
+    "bodySite": {
+      "short": "Observed body part",
+      "type": "CodeableConcept",
+      "binding": {
+        "strength": "example",
+        "valueSet": "http://hl7.org/fhir/ValueSet/body-site",
+        "bindingName": "BodySite"
+      },
+      "index": 33
+    },
+    "method": {
+      "short": "How it was done",
+      "type": "CodeableConcept",
+      "binding": {
+        "strength": "example",
+        "valueSet": "http://hl7.org/fhir/ValueSet/observation-methods",
+        "bindingName": "ObservationMethod"
+      },
+      "index": 34
+    },
+    "specimen": {
+      "short": "Specimen used for this observation",
+      "type": "Reference",
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Specimen"
+      ],
+      "index": 35
+    },
+    "device": {
+      "short": "(Measurement) Device",
+      "type": "Reference",
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Device",
+        "http://hl7.org/fhir/StructureDefinition/DeviceMetric"
+      ],
+      "index": 36
+    },
+    "referenceRange": {
+      "short": "Provides guide for interpretation",
+      "type": "BackboneElement",
+      "constraint": {
+        "obs-3": {
+          "expression": "low.exists() or high.exists() or text.exists()",
+          "human": "Must have at least a low or a high or text",
+          "severity": "error"
+        }
+      },
+      "array": true,
+      "index": 37,
+      "elements": {
+        "low": {
+          "short": "Low Range, if relevant",
+          "type": "Quantity",
+          "index": 38
+        },
+        "high": {
+          "short": "High Range, if relevant",
+          "type": "Quantity",
+          "index": 39
+        },
+        "type": {
+          "short": "Reference range qualifier",
+          "type": "CodeableConcept",
+          "binding": {
+            "strength": "preferred",
+            "valueSet": "http://hl7.org/fhir/ValueSet/referencerange-meaning",
+            "bindingName": "ObservationRangeMeaning"
+          },
+          "index": 40
+        },
+        "appliesTo": {
+          "short": "Reference range population",
+          "type": "CodeableConcept",
+          "binding": {
+            "strength": "example",
+            "valueSet": "http://hl7.org/fhir/ValueSet/referencerange-appliesto",
+            "bindingName": "ObservationRangeType"
+          },
+          "array": true,
+          "index": 41
+        },
+        "age": {
+          "short": "Applicable age range, if relevant",
+          "type": "Range",
+          "index": 42
+        },
+        "text": {
+          "short": "Text based reference range in an observation",
+          "type": "string",
+          "index": 43
+        }
+      }
+    },
+    "hasMember": {
+      "short": "Related resource that belongs to the Observation group",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/MolecularSequence",
+        "http://hl7.org/fhir/StructureDefinition/Observation",
+        "http://hl7.org/fhir/StructureDefinition/QuestionnaireResponse"
+      ],
+      "array": true,
+      "index": 44
+    },
+    "derivedFrom": {
+      "short": "Related measurements the observation is made from",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/DocumentReference",
+        "http://hl7.org/fhir/StructureDefinition/ImagingStudy",
+        "http://hl7.org/fhir/StructureDefinition/Media",
+        "http://hl7.org/fhir/StructureDefinition/MolecularSequence",
+        "http://hl7.org/fhir/StructureDefinition/Observation",
+        "http://hl7.org/fhir/StructureDefinition/QuestionnaireResponse"
+      ],
+      "array": true,
+      "index": 45
+    },
+    "component": {
+      "short": "Component results",
+      "type": "BackboneElement",
+      "isSummary": true,
+      "array": true,
+      "index": 46,
+      "elements": {
+        "code": {
+          "short": "Type of component observation (code / type)",
+          "type": "CodeableConcept",
+          "isSummary": true,
+          "binding": {
+            "strength": "example",
+            "valueSet": "http://hl7.org/fhir/ValueSet/observation-codes",
+            "bindingName": "ObservationCode"
+          },
+          "index": 47
+        },
+        "value": {
+          "short": "Actual component result",
+          "isSummary": true,
+          "choices": [
+            "valueQuantity",
+            "valueCodeableConcept",
+            "valueString",
+            "valueBoolean",
+            "valueInteger",
+            "valueRange",
+            "valueRatio",
+            "valueSampledData",
+            "valueTime",
+            "valueDateTime",
+            "valuePeriod"
+          ],
+          "index": 49
+        },
+        "valueQuantity": {
+          "short": "Actual component result",
+          "type": "Quantity",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 50
+        },
+        "valueCodeableConcept": {
+          "short": "Actual component result",
+          "type": "CodeableConcept",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 51
+        },
+        "valueString": {
+          "short": "Actual component result",
+          "type": "string",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 52
+        },
+        "valueBoolean": {
+          "short": "Actual component result",
+          "type": "boolean",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 53
+        },
+        "valueInteger": {
+          "short": "Actual component result",
+          "type": "integer",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 54
+        },
+        "valueRange": {
+          "short": "Actual component result",
+          "type": "Range",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 55
+        },
+        "valueRatio": {
+          "short": "Actual component result",
+          "type": "Ratio",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 56
+        },
+        "valueSampledData": {
+          "short": "Actual component result",
+          "type": "SampledData",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 57
+        },
+        "valueTime": {
+          "short": "Actual component result",
+          "type": "time",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 58
+        },
+        "valueDateTime": {
+          "short": "Actual component result",
+          "type": "dateTime",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 59
+        },
+        "valuePeriod": {
+          "short": "Actual component result",
+          "type": "Period",
+          "isSummary": true,
+          "choiceOf": "value",
+          "index": 60
+        },
+        "dataAbsentReason": {
+          "short": "Why the component result is missing",
+          "type": "CodeableConcept",
+          "binding": {
+            "strength": "extensible",
+            "valueSet": "http://hl7.org/fhir/ValueSet/data-absent-reason",
+            "bindingName": "ObservationValueAbsentReason"
+          },
+          "index": 61
+        },
+        "interpretation": {
+          "short": "High, low, normal, etc.",
+          "type": "CodeableConcept",
+          "binding": {
+            "strength": "extensible",
+            "valueSet": "http://hl7.org/fhir/ValueSet/observation-interpretation",
+            "bindingName": "ObservationInterpretation"
+          },
+          "array": true,
+          "index": 62
+        },
+        "referenceRange": {
+          "short": "Provides guide for interpretation of component result",
+          "elementReference": [
+            "http://hl7.org/fhir/StructureDefinition/Observation",
+            "elements",
+            "referenceRange"
+          ],
+          "array": true,
+          "index": 63
+        }
+      },
+      "required": [
+        "code"
+      ]
+    }
+  },
+  "required": [
+    "code",
+    "status"
+  ]
+}

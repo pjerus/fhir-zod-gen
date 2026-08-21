@@ -1,0 +1,25 @@
+{
+  "name": "Range",
+  "type": "Range",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Range",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Range Type: A set of ordered Quantities defined by a low and high limit.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "low": {
+      "short": "Low limit",
+      "type": "Quantity",
+      "isSummary": true,
+      "index": 0
+    },
+    "high": {
+      "short": "High limit",
+      "type": "Quantity",
+      "isSummary": true,
+      "index": 1
+    }
+  }
+}

@@ -12,13 +12,16 @@ const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "
 
 let source: FixtureSchemaSource;
 let uscorePatient: ResolvedSchema;
+let bloodPressure: ResolvedSchema;
+
+function loadFixtureDoc(fileName: string): FhirSchemaDocument {
+  return JSON.parse(readFileSync(join(FIXTURES_DIR, fileName), "utf-8")) as FhirSchemaDocument;
+}
 
 beforeAll(() => {
   source = loadFixtureSchemaSource(FIXTURES_DIR);
-  const doc = JSON.parse(
-    readFileSync(join(FIXTURES_DIR, "uscore-patient.fhirschema.json"), "utf-8")
-  ) as FhirSchemaDocument;
-  uscorePatient = resolveDocument(doc, source);
+  uscorePatient = resolveDocument(loadFixtureDoc("uscore-patient.fhirschema.json"), source);
+  bloodPressure = resolveDocument(loadFixtureDoc("uscore-blood-pressure.fhirschema.json"), source);
 });
 
 /** Walks every element in a resolved tree, depth-first, for whole-tree assertions. */
@@ -171,7 +174,7 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
     expect(() => resolveDocument(doc, source)).toThrow(/was not found via SchemaSource\.getByUrl/);
   });
 
-  it("throws on a multi-level profile chain (base is itself a profile) rather than silently mis-merging", () => {
+  it("throws when a profile in the base chain declares no base", () => {
     const stubSource: SchemaSource = {
       getByUrl: (url) => (url === "urn:mid-profile" ? midProfile : undefined),
       getByType: () => undefined,
@@ -183,7 +186,6 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
       kind: "resource",
       class: "profile",
       derivation: "constraint",
-      base: "urn:base",
       elements: {},
     };
     const leafProfile: FhirSchemaDocument = {
@@ -196,6 +198,175 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
       base: "urn:mid-profile",
       elements: {},
     };
-    expect(() => resolveDocument(leafProfile, stubSource)).toThrow(/is itself a profile/);
+    expect(() => resolveDocument(leafProfile, stubSource)).toThrow(/declares no base/);
+  });
+
+  it("throws a clear error on a circular base chain (A -> B -> A) instead of hanging or overflowing the stack", () => {
+    const stubSource: SchemaSource = {
+      getByUrl: (url) => (url === "urn:a" ? docA : url === "urn:b" ? docB : undefined),
+      getByType: () => undefined,
+    };
+    const docA: FhirSchemaDocument = {
+      url: "urn:a",
+      name: "A",
+      type: "Patient",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:b",
+      elements: {},
+    };
+    const docB: FhirSchemaDocument = {
+      url: "urn:b",
+      name: "B",
+      type: "Patient",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:a",
+      elements: {},
+    };
+    expect(() => resolveDocument(docA, stubSource)).toThrow(/circular base chain/);
+  });
+});
+
+describe("resolveDocument — multi-level profile chains (issue #5)", () => {
+  // Three synthetic layers standing in for
+  // us-core-blood-pressure -> us-core-vital-signs -> vitalsigns -> Observation:
+  // `leaf` narrows over `mid`, which narrows over `base` (a true resource,
+  // derivation "specialization"). `mid` is deliberately silent about
+  // `alpha` (doesn't restate it in its own `required`) even though `base`
+  // requires it — proving a middle layer's silence inherits rather than
+  // resets, generalized past the two-level case resolve.test.ts already
+  // covers for `communication`.
+  const stubSource: SchemaSource = {
+    getByUrl: (url) => (url === "urn:mid" ? mid : url === "urn:base" ? base : undefined),
+    getByType: () => undefined,
+  };
+  const base: FhirSchemaDocument = {
+    url: "urn:base",
+    name: "Base",
+    type: "Thing",
+    kind: "resource",
+    class: "type",
+    derivation: "specialization",
+    required: ["alpha", "beta"],
+    elements: {
+      alpha: { type: "string" },
+      beta: { type: "string" },
+      gamma: { type: "string" },
+    },
+  };
+  const mid: FhirSchemaDocument = {
+    url: "urn:mid",
+    name: "Mid",
+    type: "Thing",
+    kind: "resource",
+    class: "profile",
+    derivation: "constraint",
+    base: "urn:base",
+    // Only restates `gamma` as newly required — silent about `alpha`/`beta`,
+    // which base already requires.
+    required: ["gamma"],
+    elements: {},
+  };
+  const leaf: FhirSchemaDocument = {
+    url: "urn:leaf",
+    name: "Leaf",
+    type: "Thing",
+    kind: "resource",
+    class: "profile",
+    derivation: "constraint",
+    base: "urn:mid",
+    elements: {},
+  };
+
+  it("resolves a three-level chain end-to-end with concrete types for every element", () => {
+    const resolved = resolveDocument(leaf, stubSource);
+    expect(resolved.elements.alpha?.type).toBe("string");
+    expect(resolved.elements.beta?.type).toBe("string");
+    expect(resolved.elements.gamma?.type).toBe("string");
+  });
+
+  it("a middle layer that doesn't restate an already-required field inherits it rather than resetting it", () => {
+    const resolved = resolveDocument(leaf, stubSource);
+    // alpha/beta: required by `base`, never restated by `mid` or `leaf` —
+    // must survive both silent layers.
+    expect(resolved.elements.alpha?.required).toBe(true);
+    expect(resolved.elements.beta?.required).toBe(true);
+    // gamma: required only by `mid`'s own differential — must still surface
+    // through `leaf`, which doesn't restate it either.
+    expect(resolved.elements.gamma?.required).toBe(true);
+  });
+
+  it("resolving `mid` directly (one level up) also shows alpha/beta inherited, not just leaf", () => {
+    const resolvedMid = resolveDocument(mid, stubSource);
+    expect(resolvedMid.elements.alpha?.required).toBe(true);
+    expect(resolvedMid.elements.beta?.required).toBe(true);
+    expect(resolvedMid.elements.gamma?.required).toBe(true);
+  });
+});
+
+describe("resolveDocument — US Core Blood Pressure (real four-level chain, issue #5)", () => {
+  // us-core-blood-pressure -> us-core-vital-signs -> vitalsigns -> Observation.
+  // Previously threw at the second hop (Phase 2 gap tracked as issue #5,
+  // measured then as 15 of 49 US Core resource profiles failing to resolve
+  // for the same reason).
+
+  it("resolves with zero elements left at type 'unknown' anywhere in the tree (choice-group markers excepted)", () => {
+    const unresolved: string[] = [];
+    walkElements(bloodPressure.elements, (path, el) => {
+      if (el.type === "unknown" && !el.choices) unresolved.push(path);
+    });
+    expect(unresolved).toEqual([]);
+  });
+
+  it("resolves status/code/subject to concrete types, required — inherited unchanged through all four layers", () => {
+    // None of these are in us-core-blood-pressure's OWN elements (its only
+    // direct elements are `code` and `component`, per the fixture) or in
+    // us-core-vital-signs's own `required` (["category"] only) — they're
+    // required only because base Observation (code, status) and vitalsigns
+    // (subject) say so, and nothing above silently resets that.
+    expect(bloodPressure.elements.status?.type).toBe("code");
+    expect(bloodPressure.elements.status?.required).toBe(true);
+    expect(bloodPressure.elements.subject?.type).toBe("Reference");
+    expect(bloodPressure.elements.subject?.required).toBe(true);
+  });
+
+  it("`code` is required (inherited from base Observation) even though blood pressure's own layer redeclares it with a `pattern`, not a fresh `required`", () => {
+    expect(bloodPressure.elements.code?.type).toBe("CodeableConcept");
+    expect(bloodPressure.elements.code?.required).toBe(true);
+  });
+
+  it("`category`'s slicing metadata survives the merge, though it's declared on us-core-vital-signs/vitalsigns, not on blood pressure itself", () => {
+    const category = bloodPressure.elements.category;
+    expect(category?.required).toBe(true);
+    expect(category?.slicing?.slices).toBeDefined();
+    expect(Object.keys(category?.slicing?.slices ?? {})).toContain("VSCat");
+  });
+
+  it("blood pressure's own component slicing (systolic/diastolic) resolves, with each slice's value type concrete", () => {
+    const component = bloodPressure.elements.component;
+    expect(component?.type).toBe("BackboneElement");
+    expect(component?.min).toBe(2);
+    expect(component?.slicing?.slices).toBeDefined();
+    expect(Object.keys(component?.slicing?.slices ?? {}).sort()).toEqual(["diastolic", "systolic"]);
+    // Component's own child structure (value[x] choices, dataAbsentReason)
+    // is inherited from base Observation.component, not redeclared by any
+    // profile layer — proof the BackboneElement merge chain survives too.
+    expect(component?.elements?.valueQuantity?.type).toBe("Quantity");
+    expect(component?.elements?.dataAbsentReason?.type).toBe("CodeableConcept");
+  });
+
+  it("resolves Observation.component.referenceRange via `elementReference` (points at the sibling top-level referenceRange, not repeated structure)", () => {
+    // Incidental fixture-verified finding, not part of the base-chain walk
+    // itself: base Observation uses `elementReference` to dedupe this
+    // element against its own top-level `referenceRange`. Without following
+    // it, this element would be the one committed fixture the "zero
+    // unresolved" gate above can't clear.
+    const referenceRange = bloodPressure.elements.component?.elements?.referenceRange;
+    expect(referenceRange?.type).toBe("BackboneElement");
+    expect(referenceRange?.elements?.low?.type).toBe("Quantity");
+    expect(referenceRange?.elements?.text?.type).toBe("string");
   });
 });
