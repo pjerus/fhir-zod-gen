@@ -5,16 +5,21 @@
  * hand-authored stand-ins — see mapper.test.ts's history, since deleted, for
  * why that approach validated nothing).
  *
- * Convention: every test here uses vitest's `it.fails()`. The assertion
- * inside states the CORRECT behavior a fixed generator must have; that
- * assertion does not hold against current mapper.ts, so the test currently
- * reports as an *expected* failure (green suite, the defect visible right
- * in the test name). When a later phase actually fixes the underlying
- * defect, flip that test's `it.fails` to a plain `it` — it should then pass
- * for real. Do not delete or rewrite the assertion when a fix lands;
- * flipping it in place is what proves the fix closed the exact gap this
- * test documents. If `it.fails` ever starts passing without anyone flipping
- * it, that is itself a bug in this file — vitest reports that as a failure.
+ * Convention (for any defect added here in future): a test starts wrapped in
+ * vitest's `it.fails()`. The assertion inside states the CORRECT behavior a
+ * fixed generator must have; while the defect is live that assertion doesn't
+ * hold, so the test reports as an *expected* failure — green suite, defect
+ * visible right in the test name. When a phase actually fixes it, flip
+ * `it.fails` to a plain `it` and it should pass for real. Do not delete or
+ * rewrite the assertion when a fix lands; flipping it in place is what proves
+ * the fix closed the exact gap the test documents. If `it.fails` ever starts
+ * passing without anyone flipping it, that is itself a bug here — vitest
+ * reports that as a failure.
+ *
+ * **All six original defects are now fixed, so every test in this file is a
+ * plain `it()` and passes for real.** The file has become a regression suite:
+ * it now guards against the six defects coming back, rather than documenting
+ * them as outstanding. The convention above still applies to anything new.
  *
  * Phase 3a update: the emitter under test is now emit/emitDocument, which
  * consumes a ResolvedSchema (merge/resolveDocument's output), not the raw
@@ -24,14 +29,16 @@
  * how we resolve or emit it. Assertions about generated *output* now go
  * through resolveDocument first.
  *
- * Defect 2 (ValueSet expansion -> z.enum) is fixed as of Phase 3b — a
- * required-strength binding whose ValueSet is committed under
- * fixtures/valuesets/ now expands to a real z.enum(...). The cross-file-import
- * half of defect 5 remains unimplemented by design (the rest of Phase 3) —
- * that one stays it.fails(). Defects 1/3/4 are genuinely fixed by consuming
- * ResolvedSchema, so those are flipped. Defect 5's "output does not compile"
- * consequence is also fixed — see that test's comment for why it's flipped
- * even though full cross-file resolution isn't.
+ * Where each defect was fixed:
+ *   1, 3, 4, 6 — Phase 3a, by emitting from a ResolvedSchema instead of the
+ *                raw document.
+ *   2          — Phase 3b, ValueSet expansion to a real z.enum(...).
+ *   5          — in two halves. Phase 3a closed the "output does not compile"
+ *                consequence (an honest z.unknown() + marker instead of a
+ *                dangling reference); issue #6 then closed the rest with real
+ *                cross-file imports and z.lazy() for genuine cycles, so
+ *                complex-typed fields now validate rather than accepting
+ *                anything.
  */
 
 import { describe, it, expect } from "vitest";
