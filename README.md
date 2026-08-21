@@ -3,11 +3,17 @@
 Generate [Zod](https://zod.dev) schemas — runtime validators plus inferred TypeScript
 types, in one artifact — from FHIR Implementation Guides.
 
-> Status: **v0.1, early / seeking contributors.** The core mapping (cardinality,
-> nested elements, required bindings → enums, choice types) works and is tested.
-> FHIRPath invariants, terminology-server-backed bindings, and slicing are not
-> implemented yet — see [Roadmap](#roadmap). This is a starting point to build
-> on, not a finished validator.
+> Status: **early / seeking contributors.** IG packages resolve and generate
+> end-to-end, profiles merge over their base resources, and generated output is
+> gated on compiling (`tsc --noEmit`) and on accepting/rejecting real conformant
+> examples.
+>
+> Known gaps, tracked as issues: profiles whose base is *itself* a profile don't
+> resolve yet ([#5](https://github.com/pjerus/fhir-zod-gen/issues/5) — about 30%
+> of US Core), complex-typed fields fall back to `z.unknown()` pending cross-file
+> imports and `z.lazy()` ([#6](https://github.com/pjerus/fhir-zod-gen/issues/6)),
+> and choice types, slicing, and FHIRPath invariants are unimplemented. This is a
+> starting point to build on, not a finished validator.
 
 FHIR® is HL7's trademark for the healthcare interoperability standard; this
 project is community tooling and is not affiliated with or endorsed by HL7.
@@ -104,10 +110,10 @@ Mapping rules, briefly:
 
 | FHIR Schema | Zod |
 |---|---|
-| `min: 1` / `required: true` | field is not `.optional()` |
+| name listed in the **parent's** `required` array | field is not `.optional()` |
 | `array: true` | wrapped in `z.array(...)`, with `.min()`/`.max()` from cardinality |
 | nested `elements` (backbone/complex types) | recursive `z.object({...})` |
-| `binding.strength === "required"` with resolved codes | `z.enum([...])` |
+| a type that can't be resolved, or a cycle | `z.unknown()` + a visible `/* TODO */` — never a dangling reference ([#6](https://github.com/pjerus/fhir-zod-gen/issues/6)) |
 | `binding.strength` extensible/preferred/example | left as `z.string()` — FHIR permits out-of-valueset values at those strengths, so an enum would reject conformant data |
 | `constraint` (FHIRPath invariants) | **not evaluated** — emitted as a `/* TODO(invariant ...) */` comment so you know it exists |
 
