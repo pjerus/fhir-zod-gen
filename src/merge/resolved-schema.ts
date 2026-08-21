@@ -59,6 +59,24 @@ export interface ResolvedElement {
    * generated schema will need z.lazy().
    */
   isCyclic?: boolean;
+  /**
+   * True when `type` names a complex datatype resolved via
+   * `SchemaSource.getByType` (HumanName, Identifier, Reference, ...) — as
+   * opposed to "BackboneElement" (always profile-local, stays inlined in
+   * whichever document declares it) or a type name the SchemaSource has no
+   * entry for (e.g. "Extension" — see this file's module comment; stays a
+   * z.unknown() fallback). Set whenever `resolveTypeElements` found *any*
+   * entry for `type`, whether it expanded fully (`elements` populated) or
+   * hit a cycle (`isCyclic`, `elements` left undefined).
+   *
+   * emit/ is pure and has no SchemaSource of its own (design doc section 3),
+   * so it cannot re-derive "is this a reusable named type" from `type`
+   * alone — this flag is that information, carried through from merge/. It's
+   * what lets emit/ decide a field becomes a cross-file
+   * `import { XSchema } from "./X.js"` reference instead of an inlined
+   * `z.object({...})` (issue #6).
+   */
+  isNamedType?: boolean;
   binding?: FhirSchemaBinding;
   constraint?: Record<string, FhirSchemaConstraintDetail>;
   choices?: string[];
