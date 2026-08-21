@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 import { generatePackage } from "./generate.js";
+import type { SchemaSource } from "./merge/index.js";
 import { formatPackageSpec, looksLikePackageSpec, parsePackageSpec, resolvePackage } from "./resolve/index.js";
 
 interface Args {
@@ -108,7 +109,13 @@ async function loadDocsFromPath(input: string): Promise<FhirSchemaDocument[]> {
   return docs;
 }
 
-async function loadDocsFromPackage(input: string, args: Args): Promise<FhirSchemaDocument[]> {
+interface LoadedInput {
+  docs: FhirSchemaDocument[];
+  /** Present only for package input — file/directory input has no base chain to walk. */
+  source?: SchemaSource;
+}
+
+async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> {
   const spec = parsePackageSpec(input);
   const log = (message: string) => {
     if (args.verbose) console.log(message);
@@ -138,27 +145,26 @@ async function loadDocsFromPackage(input: string, args: Args): Promise<FhirSchem
     `Resolved ${formatPackageSpec(resolved.spec)} — ${resolved.documents.length} resource StructureDefinition(s).`
   );
 
-  // TODO(phase-3): these documents are profiles as published — they carry
-  // only what they narrow, so emitting straight from them reproduces defect
-  // 4 (design doc section 1). `resolved.source` is the SchemaSource that
-  // fixes it: merge/'s resolveDocument(doc, source) fills in every
-  // type/array/min/max from the base chain. Wiring it in needs emit/ to
-  // accept a ResolvedSchema, which is Phase 3's seam — see the Phase 4 PR.
-  return resolved.documents;
+  // The documents are profiles as published — they restate only what they
+  // narrow. `resolved.source` is what fills the rest in: it indexes the whole
+  // dependency closure, so merge/ can walk each profile up to the base
+  // resource in hl7.fhir.r4.core (design doc section 1, defect 4).
+  return { docs: resolved.documents, source: resolved.source };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const docs = isPackageInput(args.input)
-    ? await loadDocsFromPackage(args.input, args)
-    : await loadDocsFromPath(args.input);
+  const { docs, source } = isPackageInput(args.input)
+    ? await loadFromPackage(args.input, args)
+    : { docs: await loadDocsFromPath(args.input), source: undefined };
 
   console.log(`Loaded ${docs.length} FHIR Schema document(s).`);
 
-  const { filesWritten, warningCount } = await generatePackage(docs, {
+  const { filesWritten, warningCount, failures } = await generatePackage(docs, {
     outDir: args.outDir,
     verbose: args.verbose,
+    source,
   });
 
   console.log(`Wrote ${filesWritten.length} file(s) to ${args.outDir}`);
@@ -166,6 +172,12 @@ async function main() {
     console.warn(
       `${warningCount} warning(s) emitted — run with -v to see them inline, or check the /* TODO */ markers in generated output.`
     );
+  }
+  if (failures.length > 0) {
+    console.warn(`\n${failures.length} document(s) could not be resolved and were skipped:`);
+    for (const failure of failures) {
+      console.warn(`  ${failure.name} (${failure.url})\n    ${failure.message}`);
+    }
   }
 }
 
