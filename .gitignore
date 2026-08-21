@@ -9,5 +9,8 @@ dist/
 # Scratch dir for src/emit/regression.test.ts's tsc/dynamic-import checks
 .tmp-emit-regression-test/
 
+# Scratch dir for src/validation/examples.test.ts's generated-schema imports
+.tmp-validate-examples/
+
 # Agent worktrees (share this .git; never track them)
 .claude/
