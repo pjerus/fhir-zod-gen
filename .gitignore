@@ -8,3 +8,6 @@ dist/
 
 # Scratch dir for src/emit/regression.test.ts's tsc/dynamic-import checks
 .tmp-emit-regression-test/
+
+# Agent worktrees (share this .git; never track them)
+.claude/
