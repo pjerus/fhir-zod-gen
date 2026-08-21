@@ -1,0 +1,26 @@
+{
+  "name": "CodeableConcept",
+  "type": "CodeableConcept",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/CodeableConcept",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for CodeableConcept Type: A concept that may be defined by a formal reference to a terminology or ontology or may be provided by text.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "coding": {
+      "short": "Code defined by a terminology system",
+      "type": "Coding",
+      "isSummary": true,
+      "array": true,
+      "index": 0
+    },
+    "text": {
+      "short": "Plain text representation of the concept",
+      "type": "string",
+      "isSummary": true,
+      "index": 1
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "name": "Identifier",
+  "type": "Identifier",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Identifier",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Identifier Type: An identifier - identifies some entity uniquely and unambiguously. Typically this is used for business identifiers.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "use": {
+      "short": "usual | official | temp | secondary | old (If known)",
+      "type": "code",
+      "isModifier": true,
+      "isModifierReason": "This is labeled as \"Is Modifier\" because applications should not mistake a temporary id for a permanent one.",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/identifier-use|4.0.1",
+        "bindingName": "IdentifierUse"
+      },
+      "index": 0
+    },
+    "type": {
+      "short": "Description of identifier",
+      "type": "CodeableConcept",
+      "isSummary": true,
+      "binding": {
+        "strength": "extensible",
+        "valueSet": "http://hl7.org/fhir/ValueSet/identifier-type",
+        "bindingName": "IdentifierType"
+      },
+      "index": 1
+    },
+    "system": {
+      "short": "The namespace for the identifier value",
+      "type": "uri",
+      "isSummary": true,
+      "index": 2
+    },
+    "value": {
+      "short": "The value that is unique",
+      "type": "string",
+      "isSummary": true,
+      "index": 3
+    },
+    "period": {
+      "short": "Time period when id is/was valid for use",
+      "type": "Period",
+      "isSummary": true,
+      "index": 4
+    },
+    "assigner": {
+      "short": "Organization that issued id (may be just text)",
+      "type": "Reference",
+      "isSummary": true,
+      "refers": [
+        "http://hl7.org/fhir/StructureDefinition/Organization"
+      ],
+      "index": 5
+    }
+  }
+}

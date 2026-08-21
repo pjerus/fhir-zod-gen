@@ -1,0 +1,70 @@
+{
+  "name": "Attachment",
+  "type": "Attachment",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Attachment",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Attachment Type: For referring to data content defined in other formats.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "contentType": {
+      "short": "Mime type of the content, with charset etc.",
+      "type": "code",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/mimetypes|4.0.1",
+        "bindingName": "MimeType"
+      },
+      "index": 0
+    },
+    "language": {
+      "short": "Human language of the content (BCP-47)",
+      "type": "code",
+      "isSummary": true,
+      "binding": {
+        "strength": "preferred",
+        "valueSet": "http://hl7.org/fhir/ValueSet/languages",
+        "bindingName": "Language"
+      },
+      "index": 1
+    },
+    "data": {
+      "short": "Data inline, base64ed",
+      "type": "base64Binary",
+      "index": 2
+    },
+    "url": {
+      "short": "Uri where the data can be found",
+      "type": "url",
+      "isSummary": true,
+      "index": 3
+    },
+    "size": {
+      "short": "Number of bytes of content (if url provided)",
+      "type": "unsignedInt",
+      "isSummary": true,
+      "index": 4
+    },
+    "hash": {
+      "short": "Hash of the data (sha-1, base64ed)",
+      "type": "base64Binary",
+      "isSummary": true,
+      "index": 5
+    },
+    "title": {
+      "short": "Label to display in place of the data",
+      "type": "string",
+      "isSummary": true,
+      "index": 6
+    },
+    "creation": {
+      "short": "Date attachment was first created",
+      "type": "dateTime",
+      "isSummary": true,
+      "index": 7
+    }
+  }
+}

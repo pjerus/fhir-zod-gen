@@ -1,0 +1,68 @@
+{
+  "name": "HumanName",
+  "type": "HumanName",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/HumanName",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for HumanName Type: A human's name with the ability to identify parts and usage.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "use": {
+      "short": "usual | official | temp | nickname | anonymous | old | maiden",
+      "type": "code",
+      "isModifier": true,
+      "isModifierReason": "This is labeled as \"Is Modifier\" because applications should not mistake a temporary or old name etc.for a current/permanent one",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/name-use|4.0.1",
+        "bindingName": "NameUse"
+      },
+      "index": 0
+    },
+    "text": {
+      "short": "Text representation of the full name",
+      "type": "string",
+      "isSummary": true,
+      "index": 1
+    },
+    "family": {
+      "short": "Family name (often called 'Surname')",
+      "type": "string",
+      "isSummary": true,
+      "index": 2
+    },
+    "given": {
+      "short": "Given names (not always 'first'). Includes middle names",
+      "type": "string",
+      "orderMeaning": "Given Names appear in the correct order for presenting the name",
+      "isSummary": true,
+      "array": true,
+      "index": 3
+    },
+    "prefix": {
+      "short": "Parts that come before the name",
+      "type": "string",
+      "orderMeaning": "Prefixes appear in the correct order for presenting the name",
+      "isSummary": true,
+      "array": true,
+      "index": 4
+    },
+    "suffix": {
+      "short": "Parts that come after the name",
+      "type": "string",
+      "orderMeaning": "Suffixes appear in the correct order for presenting the name",
+      "isSummary": true,
+      "array": true,
+      "index": 5
+    },
+    "period": {
+      "short": "Time period when name was/is in use",
+      "type": "Period",
+      "isSummary": true,
+      "index": 6
+    }
+  }
+}

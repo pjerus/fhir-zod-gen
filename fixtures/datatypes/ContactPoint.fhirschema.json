@@ -1,0 +1,55 @@
+{
+  "name": "ContactPoint",
+  "type": "ContactPoint",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/ContactPoint",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for ContactPoint Type: Details for all kinds of technology mediated contact points for a person or organization, including telephone, email, etc.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "system": {
+      "short": "phone | fax | email | pager | url | sms | other",
+      "type": "code",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/contact-point-system|4.0.1",
+        "bindingName": "ContactPointSystem"
+      },
+      "index": 0
+    },
+    "value": {
+      "short": "The actual contact point details",
+      "type": "string",
+      "isSummary": true,
+      "index": 1
+    },
+    "use": {
+      "short": "home | work | temp | old | mobile - purpose of this contact point",
+      "type": "code",
+      "isModifier": true,
+      "isModifierReason": "This is labeled as \"Is Modifier\" because applications should not mistake a temporary or old contact etc.for a current/permanent one",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/contact-point-use|4.0.1",
+        "bindingName": "ContactPointUse"
+      },
+      "index": 2
+    },
+    "rank": {
+      "short": "Specify preferred order of use (1 = highest)",
+      "type": "positiveInt",
+      "isSummary": true,
+      "index": 3
+    },
+    "period": {
+      "short": "Time period when the contact point was/is in use",
+      "type": "Period",
+      "isSummary": true,
+      "index": 4
+    }
+  }
+}

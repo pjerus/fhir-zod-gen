@@ -13,7 +13,11 @@
  *   3. Convert the target StructureDefinitions to FHIR Schema with
  *      @atomic-ehr/fhirschema's translate(), and write the *unmodified*
  *      converter output as pretty-printed JSON under fixtures/.
- *   4. Copy the ValueSet/CodeSystem pairs needed to expand the `required`
+ *   4. Convert the complex-type StructureDefinitions that base R4 Patient's
+ *      elements (and US Core Blood Pressure's components) reference, into
+ *      fixtures/datatypes/ — see DATATYPES below for the closed set and why
+ *      it's closed.
+ *   5. Copy the ValueSet/CodeSystem pairs needed to expand the `required`
  *      bindings those StructureDefinitions use, and one conformant example,
  *      verbatim into fixtures/.
  *
@@ -35,6 +39,38 @@ const PACKAGES = {
   r4: { id: "hl7.fhir.r4.core", version: "4.0.1" },
   uscore: { id: "hl7.fhir.us.core", version: "6.1.0" },
 };
+
+/**
+ * Complex-type StructureDefinitions that fixtures/r4-patient.fhirschema.json
+ * and fixtures/uscore-blood-pressure.fhirschema.json reference by `type`,
+ * needed so Phase 2's merge/ can resolve a profile element's type (e.g.
+ * "name": {type:"HumanName"}) down to its concrete leaf fields (e.g.
+ * name.family: string).
+ *
+ * This set is verified closed: translating each of these 10 and walking
+ * their own `elements` for further complex-type references yields only
+ * types already in this list (or primitives). The one type that is NOT
+ * closed is Extension — its `value[x]` choice group alone references 15
+ * more narrow datatypes (Age, ContactDetail, Contributor, Count,
+ * DataRequirement, Distance, Dosage, Duration, Expression, Money,
+ * ParameterDefinition, RelatedArtifact, Signature, Timing,
+ * TriggerDefinition, UsageContext) that exist *only* to be Extension.value
+ * choices and are not otherwise used by these three fixtures. Extension is
+ * deliberately NOT included here — see src/merge/resolve.ts's module
+ * comment for how merge/ handles a type name with no SchemaSource entry.
+ */
+const DATATYPES = [
+  "Address",
+  "Attachment",
+  "CodeableConcept",
+  "Coding",
+  "ContactPoint",
+  "HumanName",
+  "Identifier",
+  "Period",
+  "Quantity",
+  "Reference",
+];
 
 function packageUrl(id: string, version: string): string {
   return `https://packages2.fhir.org/packages/${id}/${version}`;
@@ -77,6 +113,7 @@ function main(): void {
     const uscoreDir = downloadAndExtract(scratchDir, "uscore");
 
     mkdirSync(FIXTURES_DIR, { recursive: true });
+    mkdirSync(join(FIXTURES_DIR, "datatypes"), { recursive: true });
     mkdirSync(join(FIXTURES_DIR, "valuesets"), { recursive: true });
     mkdirSync(join(FIXTURES_DIR, "examples"), { recursive: true });
 
@@ -92,7 +129,13 @@ function main(): void {
     const uscoreBp = readStructureDefinition(uscoreDir, "StructureDefinition-us-core-blood-pressure.json");
     writeFixture("uscore-blood-pressure.fhirschema.json", translate(uscoreBp as any));
 
-    // 4. ValueSets/CodeSystems needed to expand the `required` bindings the
+    // 4. Complex-type datatype schemas — see DATATYPES above.
+    for (const name of DATATYPES) {
+      const sd = readStructureDefinition(r4Dir, `StructureDefinition-${name}.json`);
+      writeFixture(`datatypes/${name}.fhirschema.json`, translate(sd as any));
+    }
+
+    // 5. ValueSets/CodeSystems needed to expand the `required` bindings the
     // three fixtures above actually reference: Patient.gender (both
     // fixtures) and US Core Patient's telecom.system / telecom.use.
     const terminology = [
@@ -107,7 +150,7 @@ function main(): void {
       copyFixture(join(r4Dir, fileName), join("valuesets", fileName));
     }
 
-    // 5. A conformant US Core Patient example from the package's own
+    // 6. A conformant US Core Patient example from the package's own
     // example/ dir (declares the us-core-patient profile in meta.profile).
     copyFixture(
       join(uscoreDir, "example", "Patient-example.json"),

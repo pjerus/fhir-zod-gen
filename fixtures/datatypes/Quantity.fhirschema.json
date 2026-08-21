@@ -1,0 +1,51 @@
+{
+  "name": "Quantity",
+  "type": "Quantity",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Quantity",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Quantity Type: A measured amount (or an amount that can potentially be measured). Note that measured amounts include amounts that are not precisely quantified, including amounts involving arbitrary units and floating currencies.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "value": {
+      "short": "Numerical value (with implicit precision)",
+      "type": "decimal",
+      "isSummary": true,
+      "index": 0
+    },
+    "comparator": {
+      "short": "< | <= | >= | > - how to understand the value",
+      "type": "code",
+      "meaningWhenMissing": "If there is no comparator, then there is no modification of the value",
+      "isModifier": true,
+      "isModifierReason": "This is labeled as \"Is Modifier\" because the comparator modifies the interpretation of the value significantly. If there is no comparator, then there is no modification of the value",
+      "isSummary": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/quantity-comparator|4.0.1",
+        "bindingName": "QuantityComparator"
+      },
+      "index": 1
+    },
+    "unit": {
+      "short": "Unit representation",
+      "type": "string",
+      "isSummary": true,
+      "index": 2
+    },
+    "system": {
+      "short": "System that defines coded unit form",
+      "type": "uri",
+      "isSummary": true,
+      "index": 3
+    },
+    "code": {
+      "short": "Coded form of the unit",
+      "type": "code",
+      "isSummary": true,
+      "index": 4
+    }
+  }
+}
