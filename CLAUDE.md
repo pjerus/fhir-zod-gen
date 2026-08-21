@@ -152,15 +152,39 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-Tracked as GitHub issues. The big ones:
+Zero open GitHub issues as of this writing — #3, #5, #6, #9, #10, and #14 are
+all closed and merged. What's actually left:
 
-- **#5 — multi-level profile chains.** `merge/` throws when a profile's base is
-  itself a profile. `us-core-blood-pressure → us-core-vital-signs → vitalsigns →
-  Observation` is four levels, so that fixture can't be processed at all. Common
-  in real IGs; highest-priority correctness gap.
-- **#6 — cross-file imports + `z.lazy()` for cycles.** Complex-typed fields
-  currently accept anything.
-- **#3 — cardinality narrowing** isn't enforced on merge.
+- **Choice-type mutual exclusivity** — in progress (another agent, concurrent
+  with this one). `value[x]`-style choice groups currently flatten to N
+  independent optional keys with no `.superRefine()` enforcing "at most one is
+  set"; see the design doc's Phase 3 section and its `@solarahealth/fhir-r4`
+  prior-art critique (section 7, REJECT/DO BETTER #1).
+- **Slicing** — specced at `docs/design/slicing-design.md` (grounded in the
+  real committed fixtures plus a scan of `hl7.fhir.us.core#6.1.0`), not
+  started. `z.discriminatedUnion` for value-type discriminators, `z.union` +
+  `.superRefine()` for pattern-type, extension slicing as its own path.
+- **FHIRPath invariants** — emitted as `/* TODO(invariant …) */` comments,
+  never evaluated (would need `fhirpath.js` at runtime).
+- **Primitive regex constraints** — `id`, `code`, etc. accept any string;
+  their real regex patterns aren't enforced.
 
-Choice-type mutual exclusivity and slicing are also unimplemented; see the spec's
-Phase 3 section.
+A generalization sweep (six structurally diverse IGs beyond the original
+r4.core/us.core pair — R5 core, SDC, SMART App Launch, genomics-reporting,
+mCODE, and a non-HL7 national IG) found zero crashes, zero compile failures,
+and zero new unresolved-document reasons. See the README's "Verified against"
+section for specifics.
+
+## Two things that are now load-bearing and non-obvious
+
+- **Generated file names are derived, not literal.** They come from
+  sanitized, collision-disambiguated identifiers (issue #13/#19) — a
+  document's raw `name`/`url` is not necessarily its output filename
+  verbatim. Don't assume `doc.name + ".ts"` when writing tooling that reads
+  generated output back.
+- **Cross-file imports mean generated files must be compiled as a set, never
+  individually.** A complex-typed field imports that type's own generated
+  schema from another file in the same output directory; per-file
+  `tsc --noEmit` on a single generated file proves nothing about whether the
+  whole set actually compiles. Always verify against the full output
+  directory together (see "Run the real CLI..." above).
