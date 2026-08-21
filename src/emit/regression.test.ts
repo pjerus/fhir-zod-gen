@@ -10,14 +10,13 @@
  *     check individual mapping rules, but only running the real generated
  *     schema against real data proves the whole pipeline holds together.
  *
- * Scope note: only r4-patient (base) and uscore-patient (profile) are
- * exercised here. uscore-blood-pressure's base
+ * Scope note: all three committed profile fixtures are exercised here.
+ * uscore-blood-pressure was previously excluded because its base
  * (http://hl7.org/fhir/us/core/StructureDefinition/us-core-vital-signs) is
- * itself a profile, and merge/resolveDocument deliberately throws on
- * multi-level profile chains (see resolve.ts's module comment and
- * resolve.test.ts) — no committed fixture resolves that chain yet, so there
- * is nothing for this phase to emit for it. Slicing (what that fixture
- * exists to exercise) is phase 3d's job regardless.
+ * itself a profile and merge/resolveDocument threw on multi-level chains;
+ * issue #5 fixed that, so it is now in the gate. Slicing (what that fixture
+ * primarily exists to exercise) is still unimplemented — the gate proves the
+ * chain resolves and compiles, not that slices are honoured.
  *
  * Both gates shell out / dynamically import generated files from a
  * gitignored scratch directory rather than asserting on source strings —
@@ -83,6 +82,34 @@ describe("compile gate: generated output must compile under tsc --noEmit", () =>
 
   it("uscore-patient (profile, resolved over r4-patient base)", () => {
     const path = writeGenerated("uscore-patient.fhirschema.json");
+    expect(() => expectCompiles(path)).not.toThrow();
+  });
+
+  it("uscore-blood-pressure (multi-level chain: -> us-core-vital-signs -> vitalsigns -> Observation)", () => {
+    const path = writeGenerated("uscore-blood-pressure.fhirschema.json");
+    expect(() => expectCompiles(path)).not.toThrow();
+  });
+
+  /**
+   * Regression: a FHIR Schema `name` is not always a valid TS identifier.
+   * Base R4 ships `observation-bodyheight`, `CQF-Questionnaire`,
+   * `DiagnosticReport-Genetics` — 15 such documents in r4.core alone. Those
+   * emitted `export const observation-bodyheightSchema = ...`, which does not
+   * parse. It went unnoticed because every fixture above happens to have an
+   * identifier-safe name, so the compile gate never saw one.
+   */
+  it("a document whose name is not a valid TS identifier still compiles", () => {
+    const doc = loadFixture("r4-patient.fhirschema.json");
+    const resolved = resolveDocument({ ...doc, name: "observation-bodyheight" }, schemaSource);
+    const { source, fileName } = emitDocument(resolved, { terminology });
+
+    expect(source).toContain("export const ObservationBodyheightSchema");
+    expect(source).not.toContain("observation-bodyheightSchema");
+    // The file name keeps the original — only identifiers are sanitized.
+    expect(fileName).toBe("observation-bodyheight.ts");
+
+    const path = join(TMP_DIR, fileName);
+    writeFileSync(path, source, "utf-8");
     expect(() => expectCompiles(path)).not.toThrow();
   });
 });
