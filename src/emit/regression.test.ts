@@ -91,8 +91,16 @@ beforeAll(() => {
     { ...loadFixture("r4-patient.fhirschema.json"), name: "observation-bodyheight", url: "http://hl7.org/fhir/StructureDefinition/observation-bodyheight" },
     schemaSource
   );
+  // Choice types (value[x]): US Core Vital Signs has a required top-level
+  // choice group (effective[x], required via vitalsigns.required inherited
+  // through the chain), an optional top-level one with complex-typed
+  // variants (value[x] -> Quantity/CodeableConcept/Period/...), and the
+  // same optional group again nested inside a repeating BackboneElement
+  // (component.value[x]) — real coverage for "required", "optional",
+  // "complex variant type", and "nested" in one fixture.
+  const usCoreVitalSigns = resolveDocument(loadFixture("uscore-vital-signs.fhirschema.json"), schemaSource);
 
-  emitted = emitPackage([r4Patient, usCorePatient, usCoreBloodPressure, hyphenated], { terminology });
+  emitted = emitPackage([r4Patient, usCorePatient, usCoreBloodPressure, hyphenated, usCoreVitalSigns], { terminology });
 
   filePaths = emitted.map(({ fileName, source }) => {
     const path = join(TMP_DIR, fileName);
@@ -198,5 +206,98 @@ describe("semantic gate: generated USCorePatientProfile validates real data", ()
     };
     const result = schema.safeParse(withBadAssigner);
     expect(result.success).toBe(false);
+  });
+});
+
+describe("semantic gate: choice types (value[x]) validate real data", () => {
+  // Minimal, hand-built payload satisfying every OTHER required field on
+  // USCoreVitalSignsProfile (category, code, status, subject) so each test
+  // below isolates the choice-group behavior it's actually checking.
+  const base = {
+    status: "final",
+    code: {},
+    category: [{}],
+    subject: {},
+  };
+
+  async function loadVitalSignsSchema(): Promise<{ safeParse: (data: unknown) => { success: boolean; error?: { issues: { message: string }[] } } }> {
+    const path = join(TMP_DIR, "USCoreVitalSignsProfile.ts");
+    const mod = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    return mod.USCoreVitalSignsProfileSchema as {
+      safeParse: (data: unknown) => { success: boolean; error?: { issues: { message: string }[] } };
+    };
+  }
+
+  it("required group (effective[x]): accepts exactly one variant", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({ ...base, effectiveDateTime: "2020-01-01T00:00:00Z" });
+    expect(result.success).toBe(true);
+  });
+
+  it("required group (effective[x]): rejects when none of the variants are provided", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({ ...base });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes("Exactly one of") && i.message.includes("effective[x]"))).toBe(true);
+  });
+
+  it("required group (effective[x]): rejects when two variants are both provided", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({
+      ...base,
+      effectiveDateTime: "2020-01-01T00:00:00Z",
+      effectivePeriod: { start: "2020-01-01T00:00:00Z" },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes("Exactly one of") && i.message.includes("effective[x]"))).toBe(true);
+  });
+
+  it("optional group (value[x]): accepts none of the variants provided", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({ ...base, effectiveDateTime: "2020-01-01T00:00:00Z" });
+    expect(result.success).toBe(true);
+  });
+
+  it("optional group (value[x]): accepts a single complex-typed variant (valueQuantity)", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({
+      ...base,
+      effectiveDateTime: "2020-01-01T00:00:00Z",
+      valueQuantity: { value: 72, unit: "beats/minute" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("optional group (value[x]): rejects valueQuantity and valueString both set", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({
+      ...base,
+      effectiveDateTime: "2020-01-01T00:00:00Z",
+      valueQuantity: { value: 72 },
+      valueString: "72 bpm",
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes("At most one of") && i.message.includes("value[x]"))).toBe(true);
+  });
+
+  it("nested group (component.value[x]): accepts a single variant inside a repeating BackboneElement", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({
+      ...base,
+      effectiveDateTime: "2020-01-01T00:00:00Z",
+      component: [{ code: {}, valueQuantity: { value: 120 } }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("nested group (component.value[x]): rejects two variants set on the same component", async () => {
+    const schema = await loadVitalSignsSchema();
+    const result = schema.safeParse({
+      ...base,
+      effectiveDateTime: "2020-01-01T00:00:00Z",
+      component: [{ code: {}, valueQuantity: { value: 120 }, valueString: "120" }],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes("At most one of") && i.message.includes("value[x]"))).toBe(true);
   });
 });
