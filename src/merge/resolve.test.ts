@@ -12,13 +12,16 @@ const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "
 
 let source: FixtureSchemaSource;
 let uscorePatient: ResolvedSchema;
+let bloodPressure: ResolvedSchema;
+
+function loadFixtureDoc(fileName: string): FhirSchemaDocument {
+  return JSON.parse(readFileSync(join(FIXTURES_DIR, fileName), "utf-8")) as FhirSchemaDocument;
+}
 
 beforeAll(() => {
   source = loadFixtureSchemaSource(FIXTURES_DIR);
-  const doc = JSON.parse(
-    readFileSync(join(FIXTURES_DIR, "uscore-patient.fhirschema.json"), "utf-8")
-  ) as FhirSchemaDocument;
-  uscorePatient = resolveDocument(doc, source);
+  uscorePatient = resolveDocument(loadFixtureDoc("uscore-patient.fhirschema.json"), source);
+  bloodPressure = resolveDocument(loadFixtureDoc("uscore-blood-pressure.fhirschema.json"), source);
 });
 
 /** Walks every element in a resolved tree, depth-first, for whole-tree assertions. */
@@ -301,5 +304,69 @@ describe("resolveDocument — multi-level profile chains (issue #5)", () => {
     expect(resolvedMid.elements.alpha?.required).toBe(true);
     expect(resolvedMid.elements.beta?.required).toBe(true);
     expect(resolvedMid.elements.gamma?.required).toBe(true);
+  });
+});
+
+describe("resolveDocument — US Core Blood Pressure (real four-level chain, issue #5)", () => {
+  // us-core-blood-pressure -> us-core-vital-signs -> vitalsigns -> Observation.
+  // Previously threw at the second hop (Phase 2 gap tracked as issue #5,
+  // measured then as 15 of 49 US Core resource profiles failing to resolve
+  // for the same reason).
+
+  it("resolves with zero elements left at type 'unknown' anywhere in the tree (choice-group markers excepted)", () => {
+    const unresolved: string[] = [];
+    walkElements(bloodPressure.elements, (path, el) => {
+      if (el.type === "unknown" && !el.choices) unresolved.push(path);
+    });
+    expect(unresolved).toEqual([]);
+  });
+
+  it("resolves status/code/subject to concrete types, required — inherited unchanged through all four layers", () => {
+    // None of these are in us-core-blood-pressure's OWN elements (its only
+    // direct elements are `code` and `component`, per the fixture) or in
+    // us-core-vital-signs's own `required` (["category"] only) — they're
+    // required only because base Observation (code, status) and vitalsigns
+    // (subject) say so, and nothing above silently resets that.
+    expect(bloodPressure.elements.status?.type).toBe("code");
+    expect(bloodPressure.elements.status?.required).toBe(true);
+    expect(bloodPressure.elements.subject?.type).toBe("Reference");
+    expect(bloodPressure.elements.subject?.required).toBe(true);
+  });
+
+  it("`code` is required (inherited from base Observation) even though blood pressure's own layer redeclares it with a `pattern`, not a fresh `required`", () => {
+    expect(bloodPressure.elements.code?.type).toBe("CodeableConcept");
+    expect(bloodPressure.elements.code?.required).toBe(true);
+  });
+
+  it("`category`'s slicing metadata survives the merge, though it's declared on us-core-vital-signs/vitalsigns, not on blood pressure itself", () => {
+    const category = bloodPressure.elements.category;
+    expect(category?.required).toBe(true);
+    expect(category?.slicing?.slices).toBeDefined();
+    expect(Object.keys(category?.slicing?.slices ?? {})).toContain("VSCat");
+  });
+
+  it("blood pressure's own component slicing (systolic/diastolic) resolves, with each slice's value type concrete", () => {
+    const component = bloodPressure.elements.component;
+    expect(component?.type).toBe("BackboneElement");
+    expect(component?.min).toBe(2);
+    expect(component?.slicing?.slices).toBeDefined();
+    expect(Object.keys(component?.slicing?.slices ?? {}).sort()).toEqual(["diastolic", "systolic"]);
+    // Component's own child structure (value[x] choices, dataAbsentReason)
+    // is inherited from base Observation.component, not redeclared by any
+    // profile layer — proof the BackboneElement merge chain survives too.
+    expect(component?.elements?.valueQuantity?.type).toBe("Quantity");
+    expect(component?.elements?.dataAbsentReason?.type).toBe("CodeableConcept");
+  });
+
+  it("resolves Observation.component.referenceRange via `elementReference` (points at the sibling top-level referenceRange, not repeated structure)", () => {
+    // Incidental fixture-verified finding, not part of the base-chain walk
+    // itself: base Observation uses `elementReference` to dedupe this
+    // element against its own top-level `referenceRange`. Without following
+    // it, this element would be the one committed fixture the "zero
+    // unresolved" gate above can't clear.
+    const referenceRange = bloodPressure.elements.component?.elements?.referenceRange;
+    expect(referenceRange?.type).toBe("BackboneElement");
+    expect(referenceRange?.elements?.low?.type).toBe("Quantity");
+    expect(referenceRange?.elements?.text?.type).toBe("string");
   });
 });

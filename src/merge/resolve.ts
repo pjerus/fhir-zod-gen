@@ -236,20 +236,33 @@ function resolveOneElement(
   source: SchemaSource,
   cache: Map<string, CacheEntry>
 ): ResolvedElement {
-  const type = rawEl?.type ?? resolvedBase?.type;
-  const array = rawEl?.array ?? resolvedBase?.array ?? false;
-  const min = rawEl?.min ?? resolvedBase?.min ?? 0;
-  const max = rawEl?.max ?? resolvedBase?.max;
+  // `elementReference` (first observed in fixtures/observation.fhirschema.json:
+  // Observation.component.referenceRange points at Observation.referenceRange
+  // rather than repeating its structure) is @atomic-ehr/fhirschema's way of
+  // deduplicating an element that's structurally identical to another one
+  // elsewhere in the SAME document. Treat the referenced element exactly
+  // like a resolved base — its type/array/min/max/elements fill in wherever
+  // this element doesn't specify its own (this element's own `short` etc.
+  // still win; component-level referenceRange has different `short` text
+  // than the top-level one it points at). Only consulted when there's no
+  // profile-chain `resolvedBase` already, since the two mechanisms haven't
+  // been observed to co-occur on one element.
+  const effectiveBase = resolvedBase ?? resolveElementReference(rawEl?.elementReference, source, cache);
+
+  const type = rawEl?.type ?? effectiveBase?.type;
+  const array = rawEl?.array ?? effectiveBase?.array ?? false;
+  const min = rawEl?.min ?? effectiveBase?.min ?? 0;
+  const max = rawEl?.max ?? effectiveBase?.max;
   // OR, not replace: `requiredNames` is converted from a differential, so
   // it only lists names THIS layer's differential newly marks required —
   // silence about a name doesn't mean "not required", it means "unchanged
-  // from base". A name already required in `resolvedBase` (accumulated from
+  // from base". A name already required in `effectiveBase` (accumulated from
   // every layer beneath this one) must stay required regardless of whether
   // this layer's own list happens to restate it — see the module comment's
   // `us-core-vital-signs` example. A layer can only ever ADD requiredness
   // this way, never remove it, which matches FHIR's own narrowing-only rule
   // for profiles.
-  const required = (requiredNames?.includes(name) ?? false) || (resolvedBase?.required ?? false);
+  const required = (requiredNames?.includes(name) ?? false) || (effectiveBase?.required ?? false);
 
   const resolved: ResolvedElement = {
     type: type ?? "unknown",
@@ -257,15 +270,15 @@ function resolveOneElement(
     min,
     max,
     required,
-    binding: rawEl?.binding ?? resolvedBase?.binding,
-    constraint: rawEl?.constraint ?? resolvedBase?.constraint,
-    choices: rawEl?.choices ?? resolvedBase?.choices,
-    choiceOf: rawEl?.choiceOf ?? resolvedBase?.choiceOf,
-    mustSupport: rawEl?.mustSupport ?? resolvedBase?.mustSupport,
-    short: rawEl?.short ?? resolvedBase?.short,
-    refers: rawEl?.refers ?? resolvedBase?.refers,
-    slicing: rawEl?.slicing ?? resolvedBase?.slicing,
-    extensions: rawEl?.extensions ?? resolvedBase?.extensions,
+    binding: rawEl?.binding ?? effectiveBase?.binding,
+    constraint: rawEl?.constraint ?? effectiveBase?.constraint,
+    choices: rawEl?.choices ?? effectiveBase?.choices,
+    choiceOf: rawEl?.choiceOf ?? effectiveBase?.choiceOf,
+    mustSupport: rawEl?.mustSupport ?? effectiveBase?.mustSupport,
+    short: rawEl?.short ?? effectiveBase?.short,
+    refers: rawEl?.refers ?? effectiveBase?.refers,
+    slicing: rawEl?.slicing ?? effectiveBase?.slicing,
+    extensions: rawEl?.extensions ?? effectiveBase?.extensions,
   };
 
   if (!type) {
@@ -277,9 +290,9 @@ function resolveOneElement(
     return resolved;
   }
 
-  let childResolvedBase = resolvedBase?.elements;
+  let childResolvedBase = effectiveBase?.elements;
 
-  if (!rawEl?.type && resolvedBase?.isCyclic) {
+  if (!rawEl?.type && effectiveBase?.isCyclic) {
     // This exact node was already determined to be a cyclic dead-end when
     // its base was resolved (e.g. it's Reference.identifier reached again
     // through a later profile layer's overlay), and this layer doesn't
@@ -326,6 +339,53 @@ function resolveOneElement(
   }
 
   return resolved;
+}
+
+/**
+ * Resolves an `elementReference` pointer — `[canonicalUrl, "elements",
+ * name, ("elements", name)...]` — to the ResolvedElement for the element it
+ * points at, so the call site can treat it like a resolved base. Not itself
+ * chain-walked or cycle-guarded beyond what recursing into
+ * `resolveOneElement` already provides: the one fixture-verified occurrence
+ * (Observation.component.referenceRange -> Observation.referenceRange)
+ * points at a plain, already-concrete sibling with no `elementReference` of
+ * its own, so a dedicated reference-chain cycle guard isn't warranted yet —
+ * add one if a fixture ever proves otherwise (this project's fixtures-are-
+ * ground-truth rule, see CLAUDE.md).
+ */
+function resolveElementReference(
+  ref: string[] | undefined,
+  source: SchemaSource,
+  cache: Map<string, CacheEntry>
+): ResolvedElement | undefined {
+  if (!ref || ref.length < 3) {
+    return undefined;
+  }
+  const [url, ...pathSegments] = ref;
+  const targetDoc = source.getByUrl(url);
+  if (!targetDoc) {
+    return undefined;
+  }
+
+  let elements: Record<string, FhirSchemaElement> | undefined = targetDoc.elements;
+  let targetName = "";
+  let rawTarget: FhirSchemaElement | undefined;
+  for (let i = 0; i < pathSegments.length; i += 2) {
+    if (pathSegments[i] !== "elements" || !elements) {
+      return undefined;
+    }
+    targetName = pathSegments[i + 1];
+    rawTarget = elements[targetName];
+    if (!rawTarget) {
+      return undefined;
+    }
+    elements = rawTarget.elements;
+  }
+  if (!rawTarget) {
+    return undefined;
+  }
+
+  return resolveOneElement(targetName, rawTarget, undefined, undefined, source, cache);
 }
 
 /**
