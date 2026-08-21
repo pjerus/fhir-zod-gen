@@ -171,7 +171,7 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
     expect(() => resolveDocument(doc, source)).toThrow(/was not found via SchemaSource\.getByUrl/);
   });
 
-  it("throws on a multi-level profile chain (base is itself a profile) rather than silently mis-merging", () => {
+  it("throws when a profile in the base chain declares no base", () => {
     const stubSource: SchemaSource = {
       getByUrl: (url) => (url === "urn:mid-profile" ? midProfile : undefined),
       getByType: () => undefined,
@@ -183,7 +183,6 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
       kind: "resource",
       class: "profile",
       derivation: "constraint",
-      base: "urn:base",
       elements: {},
     };
     const leafProfile: FhirSchemaDocument = {
@@ -196,6 +195,111 @@ describe("resolveDocument — error handling for out-of-scope base chains", () =
       base: "urn:mid-profile",
       elements: {},
     };
-    expect(() => resolveDocument(leafProfile, stubSource)).toThrow(/is itself a profile/);
+    expect(() => resolveDocument(leafProfile, stubSource)).toThrow(/declares no base/);
+  });
+
+  it("throws a clear error on a circular base chain (A -> B -> A) instead of hanging or overflowing the stack", () => {
+    const stubSource: SchemaSource = {
+      getByUrl: (url) => (url === "urn:a" ? docA : url === "urn:b" ? docB : undefined),
+      getByType: () => undefined,
+    };
+    const docA: FhirSchemaDocument = {
+      url: "urn:a",
+      name: "A",
+      type: "Patient",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:b",
+      elements: {},
+    };
+    const docB: FhirSchemaDocument = {
+      url: "urn:b",
+      name: "B",
+      type: "Patient",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:a",
+      elements: {},
+    };
+    expect(() => resolveDocument(docA, stubSource)).toThrow(/circular base chain/);
+  });
+});
+
+describe("resolveDocument — multi-level profile chains (issue #5)", () => {
+  // Three synthetic layers standing in for
+  // us-core-blood-pressure -> us-core-vital-signs -> vitalsigns -> Observation:
+  // `leaf` narrows over `mid`, which narrows over `base` (a true resource,
+  // derivation "specialization"). `mid` is deliberately silent about
+  // `alpha` (doesn't restate it in its own `required`) even though `base`
+  // requires it — proving a middle layer's silence inherits rather than
+  // resets, generalized past the two-level case resolve.test.ts already
+  // covers for `communication`.
+  const stubSource: SchemaSource = {
+    getByUrl: (url) => (url === "urn:mid" ? mid : url === "urn:base" ? base : undefined),
+    getByType: () => undefined,
+  };
+  const base: FhirSchemaDocument = {
+    url: "urn:base",
+    name: "Base",
+    type: "Thing",
+    kind: "resource",
+    class: "type",
+    derivation: "specialization",
+    required: ["alpha", "beta"],
+    elements: {
+      alpha: { type: "string" },
+      beta: { type: "string" },
+      gamma: { type: "string" },
+    },
+  };
+  const mid: FhirSchemaDocument = {
+    url: "urn:mid",
+    name: "Mid",
+    type: "Thing",
+    kind: "resource",
+    class: "profile",
+    derivation: "constraint",
+    base: "urn:base",
+    // Only restates `gamma` as newly required — silent about `alpha`/`beta`,
+    // which base already requires.
+    required: ["gamma"],
+    elements: {},
+  };
+  const leaf: FhirSchemaDocument = {
+    url: "urn:leaf",
+    name: "Leaf",
+    type: "Thing",
+    kind: "resource",
+    class: "profile",
+    derivation: "constraint",
+    base: "urn:mid",
+    elements: {},
+  };
+
+  it("resolves a three-level chain end-to-end with concrete types for every element", () => {
+    const resolved = resolveDocument(leaf, stubSource);
+    expect(resolved.elements.alpha?.type).toBe("string");
+    expect(resolved.elements.beta?.type).toBe("string");
+    expect(resolved.elements.gamma?.type).toBe("string");
+  });
+
+  it("a middle layer that doesn't restate an already-required field inherits it rather than resetting it", () => {
+    const resolved = resolveDocument(leaf, stubSource);
+    // alpha/beta: required by `base`, never restated by `mid` or `leaf` —
+    // must survive both silent layers.
+    expect(resolved.elements.alpha?.required).toBe(true);
+    expect(resolved.elements.beta?.required).toBe(true);
+    // gamma: required only by `mid`'s own differential — must still surface
+    // through `leaf`, which doesn't restate it either.
+    expect(resolved.elements.gamma?.required).toBe(true);
+  });
+
+  it("resolving `mid` directly (one level up) also shows alpha/beta inherited, not just leaf", () => {
+    const resolvedMid = resolveDocument(mid, stubSource);
+    expect(resolvedMid.elements.alpha?.required).toBe(true);
+    expect(resolvedMid.elements.beta?.required).toBe(true);
+    expect(resolvedMid.elements.gamma?.required).toBe(true);
   });
 });
