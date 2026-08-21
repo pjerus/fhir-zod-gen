@@ -1,0 +1,105 @@
+{
+  "name": "USCoreObservationPregnancyStatusProfile",
+  "type": "Observation",
+  "kind": "resource",
+  "class": "profile",
+  "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-observation-pregnancystatus",
+  "version": "6.1.0",
+  "description": "The US Core Pregnancy Status Observation Profile is based upon the core FHIR Observation Resource and implements the US Core Data for Interoperability (USCDI) v3 Pregnancy status requirements. This profile sets minimum expectations for the Observation resource to record, search, and fetch the \"state or condition of being pregnant\" associated with a patient to promote interoperability and adoption through common implementation. It identifies which core elements, extensions, vocabularies, and value sets **SHALL** be present in the resource and constrains the way the elements are used when using this profile. It provides the floor for standards development for specific use cases.",
+  "derivation": "constraint",
+  "base": "http://hl7.org/fhir/StructureDefinition/Observation",
+  "elements": {
+    "status": {
+      "short": "(USCDI) registered | preliminary | final | amended +",
+      "mustSupport": true,
+      "index": 0
+    },
+    "category": {
+      "short": "(USCDI) Classification of  type of observation",
+      "mustSupport": true,
+      "index": 1,
+      "slicing": {
+        "discriminator": [
+          {
+            "type": "pattern",
+            "path": "$this"
+          }
+        ],
+        "rules": "open",
+        "slices": {
+          "SocialHistory": {
+            "match": {
+              "coding": [
+                {
+                  "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                  "code": "social-history"
+                }
+              ]
+            },
+            "schema": {
+              "short": "(USCDI) Classification of  type of observation",
+              "pattern": {
+                "type": "CodeableConcept",
+                "value": {
+                  "coding": [
+                    "[Circular Reference]"
+                  ]
+                }
+              },
+              "mustSupport": true,
+              "type": "CodeableConcept",
+              "index": 2
+            },
+            "max": 1
+          }
+        }
+      }
+    },
+    "code": {
+      "short": "(USCDI) Pregnancy Status",
+      "pattern": {
+        "type": "CodeableConcept",
+        "value": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "82810-3"
+            }
+          ]
+        }
+      },
+      "mustSupport": true,
+      "type": "CodeableConcept",
+      "index": 3
+    },
+    "subject": {
+      "short": "(USCDI) Who and/or what the observation is about",
+      "type": "Reference",
+      "mustSupport": true,
+      "refers": [
+        "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+      ],
+      "index": 4
+    },
+    "effectiveDateTime": {
+      "short": "(USCDI) Clinically relevant time/time-period for observation",
+      "mustSupport": true,
+      "index": 5
+    },
+    "valueCodeableConcept": {
+      "short": "(USCDI) Coded Responses from Pregnancy Status Value Set",
+      "type": "CodeableConcept",
+      "mustSupport": true,
+      "binding": {
+        "strength": "preferred",
+        "valueSet": "http://hl7.org/fhir/us/core/ValueSet/us-core-pregnancy-status"
+      },
+      "index": 6
+    }
+  },
+  "required": [
+    "effectiveDateTime",
+    "subject",
+    "valueCodeableConcept"
+  ]
+}
