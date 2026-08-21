@@ -6,6 +6,7 @@ import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 import { generatePackage } from "./generate.js";
 import type { SchemaSource } from "./merge/index.js";
 import { formatPackageSpec, looksLikePackageSpec, parsePackageSpec, resolvePackage } from "./resolve/index.js";
+import type { TerminologySource } from "./terminology/index.js";
 
 interface Args {
   input: string;
@@ -113,6 +114,8 @@ interface LoadedInput {
   docs: FhirSchemaDocument[];
   /** Present only for package input — file/directory input has no base chain to walk. */
   source?: SchemaSource;
+  /** Present only for package input — file/directory input has no package to read terminology from. */
+  terminology?: TerminologySource;
 }
 
 async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> {
@@ -149,15 +152,16 @@ async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> 
   // narrow. `resolved.source` is what fills the rest in: it indexes the whole
   // dependency closure, so merge/ can walk each profile up to the base
   // resource in hl7.fhir.r4.core (design doc section 1, defect 4).
-  return { docs: resolved.documents, source: resolved.source };
+  // `resolved.terminology` does the same for required bindings (issue #10).
+  return { docs: resolved.documents, source: resolved.source, terminology: resolved.terminology };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const { docs, source } = isPackageInput(args.input)
+  const { docs, source, terminology } = isPackageInput(args.input)
     ? await loadFromPackage(args.input, args)
-    : { docs: await loadDocsFromPath(args.input), source: undefined };
+    : { docs: await loadDocsFromPath(args.input), source: undefined, terminology: undefined };
 
   console.log(`Loaded ${docs.length} FHIR Schema document(s).`);
 
@@ -165,6 +169,7 @@ async function main() {
     outDir: args.outDir,
     verbose: args.verbose,
     source,
+    terminology,
   });
 
   console.log(`Wrote ${filesWritten.length} file(s) to ${args.outDir}`);

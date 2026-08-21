@@ -11,6 +11,7 @@
 
 import { installPackageClosure, type InstallOptions } from "./install.js";
 import { PackageSchemaSource, type LoadedPackage } from "./package-schema-source.js";
+import { PackageTerminologySource } from "./package-terminology-source.js";
 import { parsePackageSpec, type PackageSpec } from "./package-spec.js";
 import type { FhirSchemaDocument } from "../fhir-schema-types.js";
 
@@ -19,6 +20,7 @@ export type { LoadedPackage } from "./package-schema-source.js";
 export type { PackageIndexEntry, PackageManifest } from "./package-index.js";
 export type { PackageSpec } from "./package-spec.js";
 export { PackageSchemaSource } from "./package-schema-source.js";
+export { PackageTerminologySource } from "./package-terminology-source.js";
 export { readPackageIndex, readPackageManifest } from "./package-index.js";
 export { installPackageClosure } from "./install.js";
 export { parsePackageSpec, looksLikePackageSpec, formatPackageSpec } from "./package-spec.js";
@@ -27,6 +29,12 @@ export interface ResolvedPackage {
   spec: PackageSpec;
   /** Backed by the whole dependency closure, not just the requested package. */
   source: PackageSchemaSource;
+  /**
+   * Backed by the whole dependency closure too — a profile package's own
+   * required bindings often point at ValueSets/CodeSystems published by its
+   * terminology dependencies, not by itself (issue #10).
+   */
+  terminology: PackageTerminologySource;
   /** The requested package as indexed — its `entries` are every resource it ships. */
   primary: LoadedPackage;
   /**
@@ -48,10 +56,12 @@ export async function resolvePackage(
   const { primary, packages } = await installPackageClosure(spec, options);
 
   const source = new PackageSchemaSource(packages, { onWarn: options.onWarn });
+  const terminology = new PackageTerminologySource(packages, { onWarn: options.onWarn });
 
   return {
     spec: { id: primary.name, version: primary.version },
     source,
+    terminology,
     primary,
     // "resource" only: extension definitions (kind "complex-type", type
     // "Extension") are handled by emit/'s extension path per the design
