@@ -370,3 +370,128 @@ describe("resolveDocument — US Core Blood Pressure (real four-level chain, iss
     expect(referenceRange?.elements?.text?.type).toBe("string");
   });
 });
+
+describe("resolveDocument — cardinality narrowing, not widening (issue #3)", () => {
+  // A three-level chain (base -> mid -> leaf, mirroring issue #5's shape)
+  // purpose-built to exercise min/max composition: `field`'s cardinality is
+  // touched at different layers in different tests below, with the OTHER
+  // layers deliberately silent, so each test isolates which layer's value
+  // should win and proves the tighter-of-two rule composes across hops
+  // rather than only holding for a single profile-over-base merge.
+  function chain(
+    fieldOnBase: { min?: number; max?: number | "*" },
+    fieldOnMid: { min?: number; max?: number | "*" } | undefined,
+    fieldOnLeaf: { min?: number; max?: number | "*" } | undefined
+  ): { base: FhirSchemaDocument; mid: FhirSchemaDocument; leaf: FhirSchemaDocument; source: SchemaSource } {
+    const base: FhirSchemaDocument = {
+      url: "urn:card-base",
+      name: "CardBase",
+      type: "Thing",
+      kind: "resource",
+      class: "type",
+      derivation: "specialization",
+      elements: { field: { type: "string", array: true, ...fieldOnBase } },
+    };
+    const mid: FhirSchemaDocument = {
+      url: "urn:card-mid",
+      name: "CardMid",
+      type: "Thing",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:card-base",
+      elements: fieldOnMid ? { field: fieldOnMid } : {},
+    };
+    const leaf: FhirSchemaDocument = {
+      url: "urn:card-leaf",
+      name: "CardLeaf",
+      type: "Thing",
+      kind: "resource",
+      class: "profile",
+      derivation: "constraint",
+      base: "urn:card-mid",
+      elements: fieldOnLeaf ? { field: fieldOnLeaf } : {},
+    };
+    const source: SchemaSource = {
+      getByUrl: (url) => (url === "urn:card-base" ? base : url === "urn:card-mid" ? mid : undefined),
+      getByType: () => undefined,
+    };
+    return { base, mid, leaf, source };
+  }
+
+  it("a profile that widens min (base 1 -> profile 0) resolves to the base's tighter min", () => {
+    const { leaf, source } = chain({ min: 1 }, { min: 0 }, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.min).toBe(1);
+  });
+
+  it("a profile that widens max (base 5 -> profile 10) resolves to the base's tighter max", () => {
+    const { leaf, source } = chain({ max: 5 }, { max: 10 }, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.max).toBe(5);
+  });
+
+  it("legitimate narrowing still works: base min 0 -> profile min 1 resolves to 1", () => {
+    const { leaf, source } = chain({ min: 0 }, { min: 1 }, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.min).toBe(1);
+  });
+
+  it("legitimate narrowing still works: base max 5 -> profile max 2 resolves to 2", () => {
+    const { leaf, source } = chain({ max: 5 }, { max: 2 }, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.max).toBe(2);
+  });
+
+  it('unbounded max ("*") is the loosest value in both directions: a concrete max always wins over "*"', () => {
+    // Base unbounded, profile narrows to a concrete number — legitimate,
+    // profile's tighter value wins.
+    const narrowed = chain({ max: "*" }, { max: 3 }, undefined);
+    expect(resolveDocument(narrowed.leaf, narrowed.source).elements.field?.max).toBe(3);
+    // Base concrete, profile widens to unbounded — malformed, base's
+    // tighter value must still win.
+    const widened = chain({ max: 3 }, { max: "*" }, undefined);
+    expect(resolveDocument(widened.leaf, widened.source).elements.field?.max).toBe(3);
+  });
+
+  it("both sides silent on max leaves it undefined (no fabricated bound)", () => {
+    const { leaf, source } = chain({}, undefined, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.max).toBeUndefined();
+  });
+
+  it("one side silent on max defers entirely to the other side, rather than treating 'unstated' as a comparable value", () => {
+    const { leaf, source } = chain({ max: 4 }, undefined, undefined);
+    expect(resolveDocument(leaf, source).elements.field?.max).toBe(4);
+  });
+
+  it("min composes across a full three-level chain: a malformed widening at the MIDDLE layer doesn't survive an outer SILENT layer", () => {
+    // base min:1 (tight) -> mid maliciously sets min:0 (widening attempt,
+    // caught at the mid hop) -> leaf never touches `field` at all. If the
+    // guard only checked one hop at a time correctly but leaf's silence
+    // somehow re-derived from raw base/mid instead of the already-reduced
+    // value, this is the case that would catch it.
+    const { leaf, source } = chain({ min: 1 }, { min: 0 }, undefined);
+    const resolvedMid = resolveDocument(source.getByUrl("urn:card-mid")!, source);
+    expect(resolvedMid.elements.field?.min).toBe(1); // caught at the mid hop
+    const resolvedLeaf = resolveDocument(leaf, source);
+    expect(resolvedLeaf.elements.field?.min).toBe(1); // still 1 through the silent outer layer
+  });
+
+  it("max composes across a full three-level chain the same way: widening at mid doesn't survive leaf's silence", () => {
+    const { leaf, source } = chain({ max: 5 }, { max: 10 }, undefined);
+    const resolvedLeaf = resolveDocument(leaf, source);
+    expect(resolvedLeaf.elements.field?.max).toBe(5);
+  });
+
+  it("a legitimate three-layer narrowing chain (min tightens at every hop) still resolves to the tightest, outermost value", () => {
+    const { leaf, source } = chain({ min: 0, max: "*" }, { min: 1, max: 5 }, { max: 2 });
+    const resolved = resolveDocument(leaf, source).elements.field;
+    expect(resolved?.min).toBe(1); // inherited from mid, leaf doesn't touch min
+    expect(resolved?.max).toBe(2); // narrowed again at leaf
+  });
+
+  it("real US Core Blood Pressure chain: array cardinality set by the outermost profile survives unchanged (regression check)", () => {
+    // component's min:2 is declared on blood pressure itself (the
+    // outermost, tightest layer in real conformant data) — confirms the
+    // tighter-of-two rule doesn't accidentally loosen a real, legitimate
+    // value while guarding against malformed ones.
+    expect(bloodPressure.elements.component?.min).toBe(2);
+    expect(bloodPressure.elements.category?.min).toBe(1);
+  });
+});

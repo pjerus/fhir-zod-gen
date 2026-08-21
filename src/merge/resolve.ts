@@ -51,6 +51,19 @@
  * it, OR is also the semantically correct merge, not just the one that
  * happens to match observed data.
  *
+ * The same narrow-only rule applies to numeric cardinality: `min` resolves
+ * as `Math.max(thisLayer, base)` and `max` as the tighter (smaller,
+ * "*" = unbounded = loosest) of the two, via `tighterMax` below — not
+ * "profile wins wholesale" the way an earlier version of this code merged
+ * min/max, which let a non-conformant profile declaring a looser cardinality
+ * than its base (e.g. min 1->0) silently widen the resolved schema past
+ * what the base resource permits (issue #3). Never wrong for conformant
+ * input (a legitimately-narrowing profile's own value already IS the
+ * tighter one, so it wins either way); structurally prevents a malformed
+ * one from winning. merge/ is still a resolver, not a validator — this
+ * doesn't reject non-conformant input, it just refuses to let it produce a
+ * looser schema than the base guarantees.
+ *
  * ## Recursion, cycles, and why Extension is deliberately unexpanded
  *
  * Complex FHIR datatypes reference each other (Reference.identifier :
@@ -98,6 +111,24 @@ type CacheEntry =
   | { state: "creating" }
   | { state: "created"; elements: Record<string, ResolvedElement> }
   | { state: "created-ref"; element: ResolvedElement };
+
+/**
+ * The tighter (smaller) of two `max` cardinality values, for the
+ * profile-vs-base narrowing rule (issue #3). `undefined` means "this side
+ * doesn't specify a max at all" — it defers entirely to the other side
+ * rather than participating as a value (there is no numeric stand-in for
+ * "unstated" that wouldn't risk winning a comparison it shouldn't be in).
+ * `"*"` means unbounded, the loosest possible value — any concrete number
+ * is tighter than it. Symmetric: works the same regardless of which
+ * argument is the profile's own value and which is the resolved base's.
+ */
+function tighterMax(a: number | "*" | undefined, b: number | "*" | undefined): number | "*" | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  if (a === "*") return b;
+  if (b === "*") return a;
+  return Math.min(a, b);
+}
 
 /**
  * Resolve one FHIR Schema document (profile or base resource) to a
@@ -252,8 +283,21 @@ function resolveOneElement(
 
   const type = rawEl?.type ?? effectiveBase?.type;
   const array = rawEl?.array ?? effectiveBase?.array ?? false;
-  const min = rawEl?.min ?? effectiveBase?.min ?? 0;
-  const max = rawEl?.max ?? effectiveBase?.max;
+  // Tighter, not "profile wins": a profile is only ever supposed to narrow
+  // cardinality, never loosen it, but nothing upstream validates that
+  // (merge/ is a resolver, not a profile validator — see the module
+  // comment). Math.max/tighterMax below make that the resolution rule
+  // itself rather than an unenforced assumption, so a non-conformant
+  // profile that declares a looser min/max than its base can't silently
+  // widen what the resolved schema accepts. Never wrong for conformant
+  // input (the tighter of two equal-or-narrowing values is just that
+  // value), and it composes correctly across an arbitrarily long base
+  // chain: each layer's own `min`/`max` is compared against the ALREADY
+  // fully-reduced value from every layer beneath it (`effectiveBase.min`/
+  // `.max`), not against the immediate base alone, so a widening attempt at
+  // any layer — not just the outermost one — is caught (issue #3).
+  const min = Math.max(rawEl?.min ?? 0, effectiveBase?.min ?? 0);
+  const max = tighterMax(rawEl?.max, effectiveBase?.max);
   // OR, not replace: `requiredNames` is converted from a differential, so
   // it only lists names THIS layer's differential newly marks required —
   // silence about a name doesn't mean "not required", it means "unchanged
