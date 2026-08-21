@@ -122,13 +122,33 @@ Read the comment before "fixing" any of these:
 
 ## Working with agents here
 
+- **Never run concurrent agents in the primary checkout
+  (`/Users/pat/ai-dev/fhir-zod`).** Give every concurrent agent its own worktree
+  *outside* this directory. This caused two real incidents: a commit intended for
+  `main` landed on an agent's branch (the branch had been checked out underneath
+  it), and separately an agent's commit landed on `main` when something else
+  checked `main` out mid-task. Both were silent. One agent then reset `main` to
+  recover, losing its own commit as collateral.
+- **A `git push` is not proof.** `git push origin main` while HEAD is on another
+  branch pushes an unchanged `main` and exits 0. Verify with
+  `git log origin/<branch>` or `git branch -r --contains <sha>` before claiming
+  anything landed. An `echo pushed` after `git push -q` proves nothing.
 - Never `git add -A` while a worktree exists under `.claude/` — it commits the
   worktree as an embedded repo. Use explicit paths.
 - Dispatched agents get explicit file ownership when running in parallel, push a
-  branch, and open a PR. Plain commit messages, no `Co-Authored-By` trailer.
-- Verify agent claims rather than trusting them: fixtures were confirmed
-  byte-identical to an independent conversion, and `it.fails()` tests confirmed
-  non-vacuous by unwrapping them.
+  branch, and open a PR immediately (the PR is a hard reference that keeps later
+  commits scoped). Plain commit messages, no `Co-Authored-By` trailer.
+- Verify agent claims rather than trusting them. What this has actually caught:
+  fixtures confirmed byte-identical to an independent conversion; `it.fails()`
+  tests confirmed non-vacuous by unwrapping them; a terminology wiring fix
+  confirmed by severing the wire and watching the test fail; and slicing
+  statistics that were right for the pipeline but wrong for the reason given.
+- **Run the real CLI against a real package before believing a change works.**
+  `node dist/cli.js hl7.fhir.r4.core#4.0.1 -o /tmp/out` (cached, offline, fast),
+  then compile the whole output directory *together* — cross-file imports mean
+  per-file compilation proves nothing. This end-to-end check has caught bugs the
+  unit suite missed every single time it was run: invalid identifiers, silent
+  filename collisions, and circular-import initialization order.
 
 ## Open gaps
 
