@@ -47,6 +47,10 @@ npx fhir-zod-gen <input> -o ./generated
 ## Usage
 
 ```bash
+# From an IG package identifier — downloaded, converted and generated for you
+fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./generated
+
+# ...or from FHIR Schema JSON you already have
 fhir-zod-gen ./examples/patient.fhirschema.json -o ./generated
 ```
 
@@ -63,11 +67,18 @@ const patient: Patient = result.data;
 Point it at a directory of FHIR Schema `.json` files to generate a whole IG
 at once — it writes one `.ts` file per profile plus a barrel `index.ts`.
 
-**Not yet supported:** pointing the CLI directly at an IG package name (e.g.
-`hl7.fhir.us.core#6.1.0`) and having it resolve + fetch + convert
-automatically. Today you need to bring your own FHIR Schema JSON (via the
-FHIR Schema converter, or hand-authored for testing). Automating that
-resolve-and-fetch step is the top item on the roadmap below.
+### IG packages
+
+Given a package identifier (`hl7.fhir.us.core#6.1.0`, or a bare id for the
+registry's `latest`), the CLI downloads the package **and its declared
+dependency closure** — US Core is nothing but constraints on base R4, so
+`hl7.fhir.r4.core` has to come along for any of it to resolve — converts
+every StructureDefinition to FHIR Schema, and generates.
+
+Packages land in the standard FHIR package cache (`~/.fhir/packages`, shared
+with sushi, the IG publisher and HAPI), so the download happens once. Override
+it with `--cache-dir <dir>`. The first run for a large IG is a few hundred MB
+and about a minute; later runs read the cache.
 
 ## What it generates
 
@@ -104,16 +115,14 @@ Mapping rules, briefly:
 
 Rough priority order — PRs and issues on any of these are very welcome:
 
-1. **IG package resolution** — accept an IG package identifier directly,
-   fetch it from the FHIR package registry, convert to FHIR Schema, generate.
-2. **FHIRPath invariants as `.refine()`** — wire up
+1. **FHIRPath invariants as `.refine()`** — wire up
    [fhirpath.js](https://github.com/HL7/fhirpath.js) so `constraint`
    expressions actually get evaluated, not just commented.
-3. **Slicing → `z.discriminatedUnion`** — FHIR slices map naturally onto
+2. **Slicing → `z.discriminatedUnion`** — FHIR slices map naturally onto
    Zod's discriminated unions; not yet implemented.
-4. **Primitive regex constraints** — FHIR's `id`, `code`, etc. have real
+3. **Primitive regex constraints** — FHIR's `id`, `code`, etc. have real
    regex patterns we're currently ignoring in favor of a plain `z.string()`.
-5. **`zod-to-json-schema` interop test suite** — confirm round-tripping
+4. **`zod-to-json-schema` interop test suite** — confirm round-tripping
    generated schemas into JSON Schema for tool-calling contexts (see below)
    doesn't lose required/enum information.
 
