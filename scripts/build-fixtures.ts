@@ -21,6 +21,20 @@
  *      (us-core-blood-pressure -> us-core-vital-signs -> vitalsigns ->
  *      Observation) so merge/'s multi-level profile resolution (issue #5)
  *      has real fixtures to walk, not just the leaf profile.
+ *   4c. Convert US Core Observation Pregnancy Status
+ *      (uscore-observation-pregnancystatus.fhirschema.json) — see
+ *      docs/design/slicing-design.md §1's fixture-gap callout: our only
+ *      other slicing fixture (blood pressure's `component`) uses a `pattern`
+ *      discriminator with `path:"code"` (a sub-path of the sliced element).
+ *      This profile's `category` is sliced with `path:"$this"` (a
+ *      whole-element pattern match) — the IG's dominant shape (24 of 29 raw
+ *      discriminators in hl7.fhir.us.core#6.1.0, per that doc's appendix),
+ *      unverified until this fixture. Chosen over the other candidate named
+ *      in that doc (US Core Practitioner's `identifier`, also `$this`)
+ *      because it needs zero new base-resource or datatype fixtures — its
+ *      base is plain Observation (already fixture'd) and its element types
+ *      (CodeableConcept, Reference) are already in DATATYPES below, so this
+ *      is a single additive file isolating exactly the one new variable.
  *   5. Copy the ValueSet/CodeSystem pairs needed to expand the `required`
  *      bindings those StructureDefinitions use, and one conformant example,
  *      verbatim into fixtures/.
@@ -169,6 +183,16 @@ function main(): void {
 
     const observation = readStructureDefinition(r4Dir, "StructureDefinition-Observation.json");
     writeFixture("observation.fhirschema.json", translate(observation as any));
+
+    // 4c. US Core Observation Pregnancy Status — see the module comment's
+    // step 4c for why this profile specifically (a `$this`-path pattern
+    // discriminator on `category`, sitting directly on base Observation, no
+    // new datatype fixtures needed).
+    const uscorePregnancyStatus = readStructureDefinition(
+      uscoreDir,
+      "StructureDefinition-us-core-observation-pregnancystatus.json"
+    );
+    writeFixture("uscore-observation-pregnancystatus.fhirschema.json", translate(uscorePregnancyStatus as any));
 
     // 4. Complex-type datatype schemas — see DATATYPES above.
     for (const name of DATATYPES) {
