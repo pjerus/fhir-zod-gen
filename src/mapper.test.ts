@@ -7,16 +7,19 @@ const patientDoc: FhirSchemaDocument = {
   name: "Patient",
   type: "Patient",
   kind: "resource",
+  class: "resource",
   derivation: "specialization",
   elements: {
-    resourceType: { type: "code", required: true },
+    // `min: 1` (not a `required` boolean — that field doesn't exist on a
+    // real FhirSchemaElement, see fhir-schema-types.ts) is the one path that
+    // currently makes mapper.ts emit a non-optional field.
+    resourceType: { type: "code", min: 1 },
     active: { type: "boolean" },
     gender: {
       type: "code",
       binding: {
         strength: "required",
         valueSet: "http://hl7.org/fhir/ValueSet/administrative-gender",
-        codes: ["male", "female", "other", "unknown"],
       },
     },
     name: {
@@ -36,12 +39,10 @@ describe("generateSchemaFile", () => {
     expect(source).not.toMatch(/"resourceType": z\.string\(\)\.optional\(\)/);
   });
 
-  it("turns required-strength bindings into z.enum", () => {
-    const { source } = generateSchemaFile(patientDoc);
-    expect(source).toContain(
-      '"gender": z.enum(["male", "female", "other", "unknown"]).optional()'
-    );
-  });
+  // The old version of this test asserted z.enum generation using a
+  // `binding.codes` field. That field never existed on real FHIR Schema
+  // output (see fhir-schema-types.ts) — see src/defects.test.ts defect #2
+  // for the real (currently failing) behavior against real fixtures.
 
   it("recurses into nested backbone elements", () => {
     const { source } = generateSchemaFile(patientDoc);
