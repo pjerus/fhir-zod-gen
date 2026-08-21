@@ -33,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { resolveDocument } from "../merge/resolve.js";
 import { loadFixtureSchemaSource } from "../merge/fixture-schema-source.js";
 import { emitDocument } from "./emit.js";
+import { loadFixtureTerminologySource } from "../terminology/index.js";
 import type { FhirSchemaDocument } from "../fhir-schema-types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +43,9 @@ const TMP_DIR = join(PROJECT_ROOT, ".tmp-emit-regression-test");
 const TSC_BIN = join(PROJECT_ROOT, "node_modules", ".bin", "tsc");
 
 const schemaSource = loadFixtureSchemaSource(FIXTURES_DIR);
+// Wired in so the compile/semantic gates below exercise the real z.enum(...)
+// path (defect 2) end-to-end, not just the plain-z.string() fallback.
+const terminology = loadFixtureTerminologySource(FIXTURES_DIR);
 
 function loadFixture(name: string): FhirSchemaDocument {
   return JSON.parse(readFileSync(join(FIXTURES_DIR, name), "utf-8")) as FhirSchemaDocument;
@@ -49,7 +53,7 @@ function loadFixture(name: string): FhirSchemaDocument {
 
 function writeGenerated(fixtureName: string): string {
   const resolved = resolveDocument(loadFixture(fixtureName), schemaSource);
-  const { fileName, source } = emitDocument(resolved);
+  const { fileName, source } = emitDocument(resolved, { terminology });
   const path = join(TMP_DIR, fileName);
   writeFileSync(path, source, "utf-8");
   return path;
@@ -113,6 +117,13 @@ describe("semantic gate: generated USCorePatientProfile validates real data", ()
     const withoutGender = { ...example };
     delete withoutGender.gender;
     const result = schema.safeParse(withoutGender);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a Patient with a `gender` value outside the expanded administrative-gender enum (defect 2)", async () => {
+    const schema = await loadPatientSchema();
+    const badGender = { ...example, gender: "not-a-real-code" };
+    const result = schema.safeParse(badGender);
     expect(result.success).toBe(false);
   });
 });
