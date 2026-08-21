@@ -1,0 +1,314 @@
+{
+  "name": "USCorePatientProfile",
+  "type": "Patient",
+  "kind": "resource",
+  "class": "profile",
+  "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient",
+  "version": "6.1.0",
+  "description": "The US Core Patient Profile meets the U.S. Core Data for Interoperability (USCDI) v3 'Patient Demographics' requirements. This profile sets minimum expectations for the Patient resource to record, search, and fetch basic demographics and other administrative information about an individual patient. It identifies which core elements, extensions, vocabularies, and value sets **SHALL** be present in the resource when using this profile to promote interoperability and adoption through common implementation.  It identifies which core elements, extensions, vocabularies, and value sets **SHALL** be present in the resource and constrains the way the elements are used when using this profile.  It provides the floor for standards development for specific use cases.",
+  "derivation": "constraint",
+  "base": "http://hl7.org/fhir/StructureDefinition/Patient",
+  "extensions": {
+    "race": {
+      "max": 1,
+      "short": "(USCDI) US Core Race Extension",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race",
+      "index": 0
+    },
+    "ethnicity": {
+      "max": 1,
+      "short": "(USCDI) US Core ethnicity Extension",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity",
+      "index": 1
+    },
+    "tribalAffiliation": {
+      "short": "(USCDI) Tribal Affiliation Extension",
+      "max": "*",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-tribal-affiliation",
+      "index": 2
+    },
+    "birthsex": {
+      "max": 1,
+      "short": "Birth Sex Extension",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex",
+      "index": 3
+    },
+    "sex": {
+      "max": 1,
+      "short": "(USCDI) Sex Extension",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-sex",
+      "index": 4
+    },
+    "genderIdentity": {
+      "short": "(USCDI) The individual's gender identity",
+      "max": "*",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-genderIdentity",
+      "index": 5
+    }
+  },
+  "elements": {
+    "extension": {
+      "short": "(USCDI) US Core Race Extension",
+      "min": 0,
+      "max": 1,
+      "type": "Extension",
+      "mustSupport": false,
+      "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race",
+      "index": 0,
+      "slicing": {
+        "slices": {
+          "race": {
+            "match": {},
+            "schema": {
+              "short": "(USCDI) US Core Race Extension",
+              "min": 0,
+              "max": 1,
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race",
+              "index": 0
+            },
+            "max": 1
+          },
+          "ethnicity": {
+            "match": {},
+            "schema": {
+              "short": "(USCDI) US Core ethnicity Extension",
+              "min": 0,
+              "max": 1,
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity",
+              "index": 1
+            },
+            "max": 1
+          },
+          "tribalAffiliation": {
+            "match": {},
+            "schema": {
+              "short": "(USCDI) Tribal Affiliation Extension",
+              "min": 0,
+              "max": "*",
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-tribal-affiliation",
+              "index": 2
+            }
+          },
+          "birthsex": {
+            "match": {},
+            "schema": {
+              "short": "Birth Sex Extension",
+              "min": 0,
+              "max": 1,
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex",
+              "index": 3
+            },
+            "max": 1
+          },
+          "sex": {
+            "match": {},
+            "schema": {
+              "short": "(USCDI) Sex Extension",
+              "min": 0,
+              "max": 1,
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-sex",
+              "index": 4
+            },
+            "max": 1
+          },
+          "genderIdentity": {
+            "match": {},
+            "schema": {
+              "short": "(USCDI) The individual's gender identity",
+              "min": 0,
+              "max": "*",
+              "type": "Extension",
+              "mustSupport": false,
+              "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-genderIdentity",
+              "index": 5
+            }
+          }
+        }
+      }
+    },
+    "identifier": {
+      "short": "(USCDI) An identifier for this patient",
+      "mustSupport": true,
+      "index": 6,
+      "elements": {
+        "system": {
+          "short": "(USCDI) The namespace for the identifier value",
+          "mustSupport": true,
+          "index": 7
+        },
+        "value": {
+          "short": "(USCDI) The value that is unique within the system.",
+          "mustSupport": true,
+          "index": 8
+        }
+      },
+      "required": [
+        "system",
+        "value"
+      ]
+    },
+    "name": {
+      "short": "(USCDI) A name associated with the patient",
+      "constraint": {
+        "us-core-6": {
+          "expression": "(family.exists() or given.exists()) xor extension.where(url='http://hl7.org/fhir/StructureDefinition/data-absent-reason').exists()",
+          "human": "At least name.given and/or name.family are present or, if neither is available, the Data Absent Reason Extension is present.",
+          "severity": "error"
+        }
+      },
+      "mustSupport": true,
+      "index": 9,
+      "elements": {
+        "use": {
+          "short": "(USCDI) usual | official | temp | nickname | anonymous | old | maiden",
+          "index": 10
+        },
+        "family": {
+          "short": "(USCDI) Family name (often called 'Surname')",
+          "mustSupport": true,
+          "index": 11
+        },
+        "given": {
+          "short": "(USCDI) Given names (not always 'first'). Includes middle names",
+          "mustSupport": true,
+          "index": 12
+        },
+        "suffix": {
+          "short": "(USCDI) Parts that come after the name",
+          "mustSupport": false,
+          "index": 13
+        },
+        "period": {
+          "short": "(USCDI) Time period when name was/is in use",
+          "mustSupport": false,
+          "index": 14
+        }
+      }
+    },
+    "telecom": {
+      "short": "(USCDI) A contact detail for the individual",
+      "mustSupport": false,
+      "index": 15,
+      "elements": {
+        "system": {
+          "short": "(USCDI) phone | fax | email | pager | url | sms | other",
+          "mustSupport": true,
+          "binding": {
+            "strength": "required",
+            "valueSet": "http://hl7.org/fhir/ValueSet/contact-point-system"
+          },
+          "index": 16
+        },
+        "value": {
+          "short": "(USCDI) The actual contact point details",
+          "mustSupport": true,
+          "index": 17
+        },
+        "use": {
+          "short": "(USCDI) home | work | temp | old | mobile - purpose of this contact point",
+          "mustSupport": true,
+          "binding": {
+            "strength": "required",
+            "valueSet": "http://hl7.org/fhir/ValueSet/contact-point-use"
+          },
+          "index": 18
+        }
+      },
+      "required": [
+        "system",
+        "value"
+      ]
+    },
+    "gender": {
+      "short": "(USCDI) male | female | other | unknown",
+      "type": "code",
+      "mustSupport": true,
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/administrative-gender"
+      },
+      "index": 19
+    },
+    "birthDate": {
+      "short": "(USCDI) The date of birth for the individual",
+      "mustSupport": true,
+      "index": 20
+    },
+    "address": {
+      "short": "(USCDI) An address for the individual",
+      "mustSupport": true,
+      "index": 22,
+      "elements": {
+        "use": {
+          "short": "(USCDI) home | work | temp | old | billing - purpose of this address",
+          "index": 23
+        },
+        "line": {
+          "short": "(USCDI) Street name, number, direction & P.O. Box etc.",
+          "mustSupport": true,
+          "index": 24
+        },
+        "city": {
+          "short": "(USCDI) Name of city, town etc.",
+          "mustSupport": true,
+          "index": 25
+        },
+        "state": {
+          "short": "(USCDI) Sub-unit of country (abbreviations ok)",
+          "mustSupport": true,
+          "binding": {
+            "strength": "extensible",
+            "valueSet": "http://hl7.org/fhir/us/core/ValueSet/us-core-usps-state"
+          },
+          "index": 26
+        },
+        "postalCode": {
+          "short": "(USCDI) US Zip Codes",
+          "mustSupport": true,
+          "index": 27
+        },
+        "period": {
+          "short": "(USCDI) Time period when address was/is in use",
+          "index": 28
+        }
+      }
+    },
+    "communication": {
+      "short": "(USCDI) A language which may be used to communicate with the patient about his or her health",
+      "mustSupport": false,
+      "index": 29,
+      "elements": {
+        "language": {
+          "short": "(USCDI) The language which can be used to communicate with the patient about his or her health",
+          "mustSupport": true,
+          "binding": {
+            "strength": "extensible",
+            "valueSet": "http://hl7.org/fhir/us/core/ValueSet/simple-language"
+          },
+          "index": 30
+        }
+      }
+    }
+  },
+  "required": [
+    "gender",
+    "identifier",
+    "name"
+  ]
+}
