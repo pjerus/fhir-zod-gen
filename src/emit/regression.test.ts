@@ -82,8 +82,15 @@ beforeAll(() => {
   // `DiagnosticReport-Genetics` — 15 such documents in r4.core alone. Those
   // emitted `export const observation-bodyheightSchema = ...`, which does
   // not parse. It went unnoticed because every fixture above happens to
-  // have an identifier-safe name, so the compile gate never saw one.
-  const hyphenated = resolveDocument({ ...loadFixture("r4-patient.fhirschema.json"), name: "observation-bodyheight" }, schemaSource);
+  // have an identifier-safe name, so the compile gate never saw one. Gets
+  // its own synthetic `url` (issue #14 made `url` the disambiguation key
+  // across a batch, so reusing r4-patient's real url here — as if this were
+  // a second document — would collide with the real Patient document above,
+  // not exercise the identifier-sanitization path this fixture exists for).
+  const hyphenated = resolveDocument(
+    { ...loadFixture("r4-patient.fhirschema.json"), name: "observation-bodyheight", url: "http://hl7.org/fhir/StructureDefinition/observation-bodyheight" },
+    schemaSource
+  );
 
   emitted = emitPackage([r4Patient, usCorePatient, usCoreBloodPressure, hyphenated], { terminology });
 
@@ -104,7 +111,9 @@ describe("compile gate: generated output (documents + shared datatypes) must com
     expect(fileNames).toContain("Patient.ts");
     expect(fileNames).toContain("USCorePatientProfile.ts");
     expect(fileNames).toContain("USCoreBloodPressureProfile.ts");
-    expect(fileNames).toContain("observation-bodyheight.ts");
+    // Issue #14: the file name is now the sanitized identifier, not the raw
+    // FHIR Schema name — no more "observation-bodyheight.ts".
+    expect(fileNames).toContain("ObservationBodyheight.ts");
     // Shared complex datatypes — emitted once each, even though multiple
     // documents above reference them.
     for (const datatype of ["Identifier", "HumanName", "Address", "ContactPoint", "Reference", "CodeableConcept", "Period"]) {
@@ -117,8 +126,9 @@ describe("compile gate: generated output (documents + shared datatypes) must com
     expect(() => expectCompiles(filePaths)).not.toThrow();
   });
 
-  it("a document whose name is not a valid TS identifier still compiles, and its file name keeps the original", () => {
-    const hyphenated = emitted.find((r) => r.fileName === "observation-bodyheight.ts")!;
+  it("a document whose name is not a valid TS identifier still compiles, and its file name is the sanitized identifier (issue #14)", () => {
+    const hyphenated = emitted.find((r) => r.fileName === "ObservationBodyheight.ts")!;
+    expect(hyphenated).toBeDefined();
     expect(hyphenated.source).toContain("export const ObservationBodyheightSchema");
     expect(hyphenated.source).not.toContain("observation-bodyheightSchema");
   });

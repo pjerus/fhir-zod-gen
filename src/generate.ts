@@ -84,17 +84,30 @@ export async function generatePackage(
 
   const results = [...shimResults, ...emitPackage(resolved, { terminology: opts.terminology })];
 
-  // Dedup by file name: two documents (or, in principle, a document and a
-  // datatype) sharing a name would otherwise silently overwrite each other
-  // on disk and emit the same barrel-index line twice (issue #14) — not
-  // fully solved here (see issue #14), but not made worse either.
+  // Guard against a duplicate file name reaching disk (issue #14). By the
+  // time we get here, emitPackage's own results are already guaranteed
+  // collision-free — it disambiguates every document and datatype name
+  // itself (buildIdentifierResolvers in emit.ts), throwing rather than
+  // letting two different documents/types resolve to the same file. This
+  // check only ever fires for the shim path (no SchemaSource: each document
+  // goes through mapper.ts's generateSchemaFile independently, with no
+  // batch-wide awareness of the others' names to disambiguate against) or a
+  // genuine caller bug. Either way, "silently keep the first and drop the
+  // rest" is exactly the defect #14 reported — fail loudly instead.
   const seenFileNames = new Set<string>();
+
+  for (const result of results) {
+    if (seenFileNames.has(result.fileName)) {
+      throw new Error(
+        `generatePackage: two emitted files share the name "${result.fileName}" — refusing to let one silently overwrite the other on disk (issue #14).`
+      );
+    }
+    seenFileNames.add(result.fileName);
+  }
+
   const exportLines: string[] = [];
 
   for (const result of results) {
-    if (seenFileNames.has(result.fileName)) continue;
-    seenFileNames.add(result.fileName);
-
     const outPath = join(opts.outDir, result.fileName);
     await writeFile(outPath, result.source, "utf-8");
     filesWritten.push(outPath);

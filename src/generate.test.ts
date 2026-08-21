@@ -59,6 +59,32 @@ describe("generatePackage", () => {
     expect(indexLines).toHaveLength(written.length - 1); // every written file except index.ts itself
   });
 
+  it("issue #14: two documents with the same name but different urls produce two files and two exports, neither silently dropped", async () => {
+    const source = loadFixtureSchemaSource(FIXTURES);
+    const makeDoc = (url: string): FhirSchemaDocument => ({
+      url,
+      name: "Example Lipid Profile",
+      type: "Observation",
+      kind: "resource",
+      class: "resource",
+      derivation: "specialization",
+      elements: {},
+    });
+    const docs = [makeDoc("http://example.org/StructureDefinition/lipid-1"), makeDoc("http://example.org/StructureDefinition/lipid-2")];
+
+    const { failures } = await generatePackage(docs, { outDir, source });
+
+    expect(failures).toEqual([]);
+    const written = readdirSync(outDir).filter((f) => f !== "index.ts");
+    expect(written).toHaveLength(2);
+    expect(new Set(written).size).toBe(2); // neither overwrote the other
+
+    const index = readFileSync(join(outDir, "index.ts"), "utf-8");
+    const indexLines = index.trim().split("\n");
+    expect(indexLines).toHaveLength(2); // both exported, not deduped away
+    expect(new Set(indexLines).size).toBe(2);
+  });
+
   it("reports a document it could not resolve instead of aborting or writing it", async () => {
     const emptySource = { getByUrl: () => undefined, getByType: () => undefined };
     const { filesWritten, failures } = await generatePackage([profile], { outDir, source: emptySource });
