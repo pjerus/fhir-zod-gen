@@ -4,6 +4,7 @@ import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 import { emitDocument } from "./emit/index.js";
 import { resolveDocument, type SchemaSource } from "./merge/index.js";
 import { generateSchemaFile } from "./mapper.js";
+import type { TerminologySource } from "./terminology/index.js";
 
 export interface GenerateOptions {
   outDir: string;
@@ -18,6 +19,16 @@ export interface GenerateOptions {
    * keeps the old self-sufficient-document behaviour of mapper.ts's shim.
    */
   source?: SchemaSource;
+  /**
+   * Where to look up a required binding's ValueSet/CodeSystem for z.enum
+   * expansion (defect 2, issue #10). Only meaningful alongside `source` —
+   * the file/directory input path has no package to read terminology from
+   * and goes through mapper.ts's shim regardless. Omitting it is a fully
+   * supported degrade: every required binding falls back to its plain
+   * primitive mapping with a TODO(defect 2) marker, same as an expansion
+   * failure. resolve/'s PackageTerminologySource is the real implementation.
+   */
+  terminology?: TerminologySource;
 }
 
 /** A document that could not be resolved, and why. Never silently dropped. */
@@ -41,7 +52,9 @@ export async function generatePackage(
   for (const doc of docs) {
     let result;
     try {
-      result = opts.source ? emitDocument(resolveDocument(doc, opts.source)) : generateSchemaFile(doc);
+      result = opts.source
+        ? emitDocument(resolveDocument(doc, opts.source), { terminology: opts.terminology })
+        : generateSchemaFile(doc);
     } catch (err) {
       // merge/ throws rather than guessing when it can't reach a base — e.g.
       // a profile whose own base is a profile. Skipping one document and
