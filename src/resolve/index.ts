@@ -10,7 +10,7 @@
  */
 
 import { installPackageClosure, type InstallOptions } from "./install.js";
-import { PackageSchemaSource } from "./package-schema-source.js";
+import { PackageSchemaSource, type LoadedPackage } from "./package-schema-source.js";
 import { parsePackageSpec, type PackageSpec } from "./package-spec.js";
 import type { FhirSchemaDocument } from "../fhir-schema-types.js";
 
@@ -27,6 +27,8 @@ export interface ResolvedPackage {
   spec: PackageSpec;
   /** Backed by the whole dependency closure, not just the requested package. */
   source: PackageSchemaSource;
+  /** The requested package as indexed — its `entries` are every resource it ships. */
+  primary: LoadedPackage;
   /**
    * The requested package's own resource StructureDefinitions, converted.
    * Profiles as published: still to be merged over their bases by merge/.
@@ -50,6 +52,7 @@ export async function resolvePackage(
   return {
     spec: { id: primary.name, version: primary.version },
     source,
+    primary,
     // "resource" only: extension definitions (kind "complex-type", type
     // "Extension") are handled by emit/'s extension path per the design
     // doc's Phase 3 section, not emitted as standalone schema files.
