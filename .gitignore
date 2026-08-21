@@ -5,3 +5,6 @@ dist/
 
 # Local archives (delivery artifacts, not source)
 *.zip
+
+# Scratch dir for src/emit/regression.test.ts's tsc/dynamic-import checks
+.tmp-emit-regression-test/
