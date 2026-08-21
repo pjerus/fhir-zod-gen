@@ -4,16 +4,22 @@ Generate [Zod](https://zod.dev) schemas — runtime validators plus inferred Typ
 types, in one artifact — from FHIR Implementation Guides.
 
 > Status: **early / seeking contributors.** IG packages resolve and generate
-> end-to-end, profiles merge over their base resources, and generated output is
-> gated on compiling (`tsc --noEmit`) and on accepting/rejecting real conformant
+> end-to-end, including profiles whose base is itself a profile (multi-level
+> chains, e.g. `us-core-blood-pressure -> us-core-vital-signs -> vitalsigns ->
+> Observation` — four levels), complex-typed fields resolve to real cross-file
+> imports with `z.lazy()` for genuine cycles, and merge narrows cardinality
+> correctly (a profile can only tighten, never silently widen, a base's `min`/
+> `max`). Generated output is gated on compiling as a whole set (`tsc --strict
+> --noEmit` across every file together — cross-file imports mean per-file
+> compilation proves nothing) and on accepting/rejecting real conformant
 > examples.
 >
-> Known gaps, tracked as issues: profiles whose base is *itself* a profile don't
-> resolve yet ([#5](https://github.com/pjerus/fhir-zod-gen/issues/5) — about 30%
-> of US Core), complex-typed fields fall back to `z.unknown()` pending cross-file
-> imports and `z.lazy()` ([#6](https://github.com/pjerus/fhir-zod-gen/issues/6)),
-> and choice types, slicing, and FHIRPath invariants are unimplemented. This is a
-> starting point to build on, not a finished validator.
+> Remaining gaps: choice-type mutual exclusivity is in progress; slicing
+> (`z.discriminatedUnion` / extension slicing) is specced at
+> [`docs/design/slicing-design.md`](./docs/design/slicing-design.md) but
+> unstarted; FHIRPath invariants are emitted as `/* TODO */` comments, not
+> evaluated; primitive regex constraints (`id`, `code`, etc.) aren't enforced
+> yet. This is a starting point to build on, not a finished validator.
 
 FHIR® is HL7's trademark for the healthcare interoperability standard; this
 project is community tooling and is not affiliated with or endorsed by HL7.
@@ -102,7 +108,37 @@ ValueSet bindings with a real code list (`gender: z.enum([...])` instead of
 If you don't need enum expansion, `--skip-terminology` omits known
 terminology-only packages from the download entirely — required bindings
 then degrade to `z.string()` with the same `TODO(defect 2)` marker used
-whenever a binding's ValueSet can't be found at all.
+whenever a binding's ValueSet can't be found at all. For US Core 6.1.0
+specifically, none of its required bindings actually need the terminology
+packages to expand (their ValueSets are already reachable without them), so
+`--skip-terminology` produces **byte-identical** output while skipping
+~389 MB of the ~646 MB closure.
+
+## Verified against
+
+Beyond the fixture-based unit suite, the generator has been run end-to-end
+(download or cache read -> convert -> merge -> emit -> compile the whole
+output set together under `tsc --strict --noEmit`) against:
+
+- `hl7.fhir.r4.core#4.0.1` — 191/191 resource StructureDefinitions resolve
+- `hl7.fhir.us.core#6.1.0` — 49/49 resource profiles resolve, including all
+  15 that previously failed on multi-level base chains
+- `hl7.fhir.r5.core#5.0.0` — R5 is supported: 225 documents resolve, and a
+  generated R5 `Patient` schema correctly accepts a conformant resource and
+  rejects an invalid `gender`, verified at runtime
+- `hl7.fhir.uv.sdc#3.0.0` (Structured Data Capture — questionnaire-heavy)
+- `hl7.fhir.uv.smart-app-launch#2.1.0` (mostly non-resource content)
+- `hl7.fhir.uv.genomics-reporting#2.0.0`
+- `hl7.fhir.us.mcode#3.0.0` (oncology, heavy extension usage)
+- `kbv.ita.erp#1.4.4` — a non-HL7, national (German e-prescription) IG from
+  a different publisher and registry namespace entirely
+
+Across all of these: zero crashes, zero compile failures, and no filename
+collisions (generated file count always matched files actually written to
+disk). Warnings remain within known, tracked gaps (choice-type flattening,
+slicing, unresolvable-type fallbacks) — exact counts aren't cited here since
+they shift as those gaps close; check `-v` output against a given commit if
+you need a number.
 
 ## What it generates
 
@@ -131,7 +167,8 @@ Mapping rules, briefly:
 | name listed in the **parent's** `required` array | field is not `.optional()` |
 | `array: true` | wrapped in `z.array(...)`, with `.min()`/`.max()` from cardinality |
 | nested `elements` (backbone/complex types) | recursive `z.object({...})` |
-| a type that can't be resolved, or a cycle | `z.unknown()` + a visible `/* TODO */` — never a dangling reference ([#6](https://github.com/pjerus/fhir-zod-gen/issues/6)) |
+| a complex-typed field | a cross-file import of that type's own generated schema — `z.lazy(() => ...)` where the reference is a genuine cycle (e.g. `Identifier` <-> `Reference`) |
+| a type that genuinely can't be resolved (no SchemaSource entry, e.g. `Extension`) | `z.unknown()` + a visible `/* TODO */` — never a dangling reference |
 | `binding.strength` extensible/preferred/example | left as `z.string()` — FHIR permits out-of-valueset values at those strengths, so an enum would reject conformant data |
 | `constraint` (FHIRPath invariants) | **not evaluated** — emitted as a `/* TODO(invariant ...) */` comment so you know it exists |
 
@@ -143,7 +180,9 @@ Rough priority order — PRs and issues on any of these are very welcome:
    [fhirpath.js](https://github.com/HL7/fhirpath.js) so `constraint`
    expressions actually get evaluated, not just commented.
 2. **Slicing → `z.discriminatedUnion`** — FHIR slices map naturally onto
-   Zod's discriminated unions; not yet implemented.
+   Zod's discriminated unions; specced at
+   [`docs/design/slicing-design.md`](./docs/design/slicing-design.md), not
+   yet implemented.
 3. **Primitive regex constraints** — FHIR's `id`, `code`, etc. have real
    regex patterns we're currently ignoring in favor of a plain `z.string()`.
 4. **`zod-to-json-schema` interop test suite** — confirm round-tripping

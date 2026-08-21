@@ -1,7 +1,12 @@
 # fhir-zod-gen — correctness rebuild design
 
 **Date:** 2026-08-21
-**Status:** approved (design shape); implementation in progress
+**Status:** Phases 0–4 merged; all six verified defects (section 1) closed.
+Remaining work is choice-type mutual exclusivity (in progress) and slicing
+(specced at `docs/design/slicing-design.md`, unstarted) — see Phase 3 below
+and CLAUDE.md's "Open gaps". This document's defect table, evidence, and
+the rejected-fhir.schema.org reasoning are historical record and are left
+as originally written; only phase/status markers below are updated.
 **Scope:** Take fhir-zod-gen from a v0.1 skeleton that produces silently-wrong
 output into a generator that emits correct Zod schemas for real FHIR
 Implementation Guides.
@@ -160,7 +165,7 @@ next one's contract.
 (eslint was declared but never installed; `--ext` removed in eslint 9+), wire
 lint into CI, drop duplicate root `WRITEUP.md`, gitignore stray zips.
 
-### Phase 1 — Ground truth (sequential, reviewed hardest)
+### Phase 1 — Ground truth (sequential, reviewed hardest) ✅ complete
 Commit real converted fixtures under `fixtures/`:
 - `r4-patient.fhirschema.json` (base, from `hl7.fhir.r4.core#4.0.1`)
 - `uscore-patient.fhirschema.json` (profile with extensions)
@@ -184,7 +189,7 @@ docs. Where the docs and the converter disagree (docs say `constraints`, the
 converter emits `constraint`), the converter wins and the discrepancy gets a
 comment.
 
-### Phase 2 — Base resolution + merge (sequential, single agent)
+### Phase 2 — Base resolution + merge (sequential, single agent) ✅ complete
 Implement `merge/`. Profile-over-base element merging, base chain walking,
 cross-file type references. This is where FHIR codegen usually goes wrong;
 it is deliberately not parallelized.
@@ -192,9 +197,23 @@ it is deliberately not parallelized.
 **Gate:** US Core Patient must resolve to concrete types with `name.array === true`
 and zero `z.unknown()`.
 
-### Phase 3 — Mapper correctness (parallelizable)
+Multi-level base chains (profile deriving from a profile — the common
+US-Core-vital-signs shape) were originally out of scope for this phase and
+tracked separately as issue #5; that gap is now closed too (merged
+alongside the rest of Phase 2's follow-up work). Cardinality narrowing
+(profile can only tighten, never widen, a base's `min`/`max`) was tracked
+as issue #3 and is also closed.
+
+### Phase 3 — Mapper correctness (parallelizable) — defects 1–6 closed; choice-type exclusivity in progress; slicing unstarted
 Fix defects 1/2/3 and implement choice types, cardinality, slicing. Read
 `@solarahealth/fhir-r4`'s generated output first.
+
+Status: defects 1–6 (section 1's table) are all fixed and covered by
+`src/defects.test.ts`. Cardinality is enforced on merge (issue #3, closed).
+Choice-type flattening happens but without the `.superRefine()` mutual-
+exclusivity check this section calls for below — that's in progress.
+Slicing (the rest of this section) hasn't been started; see
+`docs/design/slicing-design.md` for the design work done ahead of it.
 
 Slicing maps to Zod as:
 - `value`-type discriminator on a literal field → `z.discriminatedUnion`
@@ -209,8 +228,14 @@ ValueSet expansion for `required` bindings reads `ValueSet-*.json` and
 locally, emit `z.string()` and warn — never a partial enum, which would reject
 conformant data.
 
-### Phase 4 — IG package pipeline (independent of Phase 3)
+### Phase 4 — IG package pipeline (independent of Phase 3) ✅ complete
 `resolve/` implementation. CLI accepts `hl7.fhir.us.core#6.1.0`.
+
+Verified beyond the original two fixtures: a generalization sweep ran the
+full pipeline against six structurally diverse IGs (R5 core, SDC, SMART App
+Launch, genomics-reporting, mCODE, and a non-HL7 national IG) with zero
+crashes and zero compile failures. See the README's "Verified against"
+section.
 
 Registry facts (verified):
 - `GET https://packages2.fhir.org/packages/{id}/{version}` → 302 → tarball
