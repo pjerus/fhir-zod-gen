@@ -5,7 +5,15 @@ import { join, extname } from "node:path";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 import { generatePackage } from "./generate.js";
 import type { SchemaSource } from "./merge/index.js";
-import { formatPackageSpec, looksLikePackageSpec, parsePackageSpec, resolvePackage } from "./resolve/index.js";
+import {
+  formatPackageSpec,
+  looksLikePackageSpec,
+  parsePackageSpec,
+  previewPackageClosure,
+  resolvePackage,
+  type ClosurePreview,
+  type PackageSpec,
+} from "./resolve/index.js";
 import type { TerminologySource } from "./terminology/index.js";
 
 interface Args {
@@ -14,10 +22,12 @@ interface Args {
   verbose: boolean;
   /** Overrides the standard FHIR package cache. Only meaningful for package input. */
   cacheDir?: string;
+  /** Omit terminology-only dependencies from the closure — see resolve/closure.ts. */
+  skipTerminology: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Partial<Args> = { verbose: false };
+  const args: Partial<Args> = { verbose: false, skipTerminology: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-o" || a === "--out") {
@@ -26,6 +36,8 @@ function parseArgs(argv: string[]): Args {
       args.cacheDir = argv[++i];
     } else if (a === "-v" || a === "--verbose") {
       args.verbose = true;
+    } else if (a === "--skip-terminology") {
+      args.skipTerminology = true;
     } else if (a === "-h" || a === "--help") {
       printHelp();
       process.exit(0);
@@ -45,6 +57,7 @@ function parseArgs(argv: string[]): Args {
     outDir: args.outDir ?? "./generated",
     verbose: args.verbose ?? false,
     cacheDir: args.cacheDir,
+    skipTerminology: args.skipTerminology ?? false,
   };
 }
 
@@ -53,26 +66,38 @@ function printHelp() {
 fhir-zod-gen — generate Zod schemas from FHIR Implementation Guides
 
 Usage:
-  fhir-zod-gen <input> [-o <outDir>] [-v] [--cache-dir <dir>]
+  fhir-zod-gen <input> [-o <outDir>] [-v] [--cache-dir <dir>] [--skip-terminology]
 
   <input>   An IG package identifier (hl7.fhir.us.core#6.1.0, or a bare id
             for the registry's latest), OR a path to a single FHIR Schema
             .json file, OR a directory of them.
 
 Options:
-  -o, --out <dir>      Output directory (default: ./generated)
-  -v, --verbose        Print per-document warnings and package progress
-      --cache-dir <d>  FHIR package cache to use (default: ~/.fhir/packages,
-                       shared with sushi / the IG publisher / HAPI)
+  -o, --out <dir>       Output directory (default: ./generated)
+  -v, --verbose         Print per-document warnings and package progress
+      --cache-dir <d>   FHIR package cache to use (default: ~/.fhir/packages,
+                        shared with sushi / the IG publisher / HAPI)
+      --skip-terminology
+                        Omit terminology-only dependencies (e.g. us.nlm.vsac,
+                        us.cdc.phinvads, hl7.terminology.*) from the download.
+                        Trade-off: required bindings that would have expanded
+                        to z.enum([...]) instead degrade to z.string() with a
+                        TODO(defect 2) marker, same as when a binding's
+                        ValueSet can't be found at all.
 
 Examples:
   fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./generated
+  fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./generated --skip-terminology
   fhir-zod-gen ./examples/patient.fhirschema.json -o ./generated
   fhir-zod-gen ./fhir-schemas/us-core -o ./generated -v
 
-Note: the first run for a package downloads it and its declared dependency
-closure (US Core pulls hl7.fhir.r4.core for the base resources it profiles).
-That is a few hundred MB and a minute or so; later runs read the cache.
+Note: the first run for a package downloads its declared dependency closure
+(US Core pulls in hl7.fhir.r4.core plus several terminology packages,
+~646 MB total). Before downloading anything, the closure and its size
+(where known) are printed and — in an interactive terminal — confirmed;
+non-interactive runs (CI, piped input) proceed automatically. Packages are
+cached at the path above; later runs of any package sharing a dependency
+read the cache instead of re-downloading.
 `);
 }
 
@@ -118,14 +143,130 @@ interface LoadedInput {
   terminology?: TerminologySource;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (const u of units) {
+    unit = u;
+    if (value < 1024) break;
+    value /= 1024;
+  }
+  return `${value.toFixed(1)} ${unit}`;
+}
+
+function formatClosureTable(preview: ClosurePreview, skipTerminology: boolean): string {
+  const header = ["Package", "Version", "Status", "Size"];
+  const rows = preview.packages.map((p) => {
+    const status = p.cached ? "cached" : skipTerminology && p.terminologyOnly ? "skipped" : "not cached";
+    const size = p.approxSizeBytes !== undefined ? formatBytes(p.approxSizeBytes) : p.cached ? "" : "unknown";
+    const label = p.terminologyOnly ? `${p.id} (terminology)` : p.id;
+    return [label, p.version, status, size];
+  });
+
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const formatRow = (r: string[]) => r.map((cell, i) => cell.padEnd(widths[i])).join("  ");
+  return [formatRow(header), ...rows.map(formatRow)].join("\n");
+}
+
+function summarizeClosure(preview: ClosurePreview, skipTerminology: boolean): string {
+  const lines: string[] = [];
+  const cached = preview.packages.filter((p) => p.cached);
+  const cachedBytes = cached.reduce((sum, p) => sum + (p.approxSizeBytes ?? 0), 0);
+  const terminologyOnly = preview.packages.filter((p) => p.terminologyOnly);
+  const skipped = skipTerminology ? terminologyOnly.filter((p) => !p.cached) : [];
+  const toDownload = preview.packages.filter((p) => !p.cached && !skipped.includes(p));
+
+  lines.push(
+    `${preview.packages.length} package(s) in the closure, ${cached.length} already cached (${formatBytes(cachedBytes)} on disk).`
+  );
+
+  if (toDownload.length > 0) {
+    lines.push(
+      `${toDownload.length} package(s) not yet cached and will be downloaded — the registry doesn't expose size without downloading, so their size isn't shown above.`
+    );
+  }
+
+  if (skipTerminology) {
+    if (skipped.length > 0) {
+      lines.push(`${skipped.length} terminology-only package(s) skipped (--skip-terminology) — not downloaded.`);
+    }
+  } else if (terminologyOnly.length > 0) {
+    const knownBytes = terminologyOnly.filter((p) => p.cached).reduce((sum, p) => sum + (p.approxSizeBytes ?? 0), 0);
+    const sizeNote = knownBytes > 0 ? ` (at least ${formatBytes(knownBytes)}, based on what's already cached)` : "";
+    lines.push(
+      `${terminologyOnly.length} of these are terminology-only and would be skipped with --skip-terminology${sizeNote} — ` +
+        `required bindings would then fall back to plain strings instead of enums.`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+async function promptYesNo(question: string): Promise<boolean> {
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    return answer === "" || answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Resolves and prints the dependency closure before touching the network for
+ * a real download (issue #9) — ids, versions, cached status, and size where
+ * it's actually known (see closure-preview.ts for why an uncached package's
+ * size can't be shown without downloading it). In an interactive terminal,
+ * asks before proceeding; a non-interactive session (CI, piped input, no
+ * TTY) just logs and continues, per the same issue's requirement 3.
+ * Skipped entirely when everything in the closure is already cached — there
+ * is nothing left to warn about.
+ */
+async function confirmClosureDownload(spec: PackageSpec, args: Args): Promise<void> {
+  const preview = await previewPackageClosure(spec, {
+    cacheDir: args.cacheDir,
+    onWarn: (message) => console.warn(message),
+  });
+
+  if (preview.packages.every((p) => p.cached)) {
+    if (args.verbose) {
+      console.log(`All ${preview.packages.length} package(s) in ${formatPackageSpec(spec)}'s closure are already cached.`);
+    }
+    return;
+  }
+
+  console.log(`\n${formatPackageSpec(spec)}'s dependency closure:\n`);
+  console.log(formatClosureTable(preview, args.skipTerminology));
+  console.log();
+  console.log(summarizeClosure(preview, args.skipTerminology));
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log("\nNon-interactive session — proceeding automatically.\n");
+    return;
+  }
+
+  const proceed = await promptYesNo("\nProceed with download? [Y/n] ");
+  if (!proceed) {
+    console.log("Aborted — nothing downloaded.");
+    process.exit(0);
+  }
+  console.log();
+}
+
 async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> {
   const spec = parsePackageSpec(input);
   const log = (message: string) => {
     if (args.verbose) console.log(message);
   };
 
+  await confirmClosureDownload(spec, args);
+
   const resolved = await resolvePackage(spec, {
     cacheDir: args.cacheDir,
+    skipTerminology: args.skipTerminology,
     onLog: log,
     onWarn: (message) => console.warn(message),
   });
