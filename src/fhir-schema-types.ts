@@ -50,6 +50,35 @@ export type FhirSchemaPrimitiveType =
   | "xhtml";
 
 /**
+ * Runtime companion to FhirSchemaPrimitiveType — union types don't exist at
+ * runtime, and src/merge/ needs to distinguish "primitive, no structure to
+ * expand" from "named complex type, look up via SchemaSource" when walking
+ * an element's `type`. Keep this list in sync with the union above.
+ */
+export const FHIR_PRIMITIVE_TYPES: readonly FhirSchemaPrimitiveType[] = [
+  "boolean",
+  "integer",
+  "string",
+  "decimal",
+  "uri",
+  "url",
+  "canonical",
+  "base64Binary",
+  "instant",
+  "date",
+  "dateTime",
+  "time",
+  "code",
+  "oid",
+  "id",
+  "markdown",
+  "unsignedInt",
+  "positiveInt",
+  "uuid",
+  "xhtml",
+];
+
+/**
  * No `codes` field — required-strength bindings carry only a `valueSet`
  * URI. Expanding that into a concrete code list needs the ValueSet/CodeSystem
  * resources (see fixtures/valuesets/); the converter does not pre-resolve it.
@@ -155,7 +184,16 @@ export interface FhirSchemaElement {
   type?: FhirSchemaPrimitiveType | string;
   array?: boolean;
   min?: number;
-  max?: number;
+  /**
+   * Unbounded cardinality serializes as the literal string "*", not a
+   * number — found during Phase 2 merge work. Verified:
+   * uscore-patient.fhirschema.json's extensions.tribalAffiliation.max and
+   * extensions.genderIdentity.max (and the mirrored
+   * elements.extension.slicing.slices.{tribalAffiliation,genderIdentity}.schema.max)
+   * are both `"*"`. Every other observed `max` across all committed
+   * fixtures (incl. fixtures/datatypes/) is a plain number.
+   */
+  max?: number | "*";
   /**
    * Child element names that are required *within this element* — e.g.
    * `identifier: {required:["system","value"]}` means identifier.system and

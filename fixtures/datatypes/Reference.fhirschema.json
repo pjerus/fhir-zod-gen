@@ -1,0 +1,42 @@
+{
+  "name": "Reference",
+  "type": "Reference",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Reference",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Reference Type: A reference from one resource to another.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "reference": {
+      "short": "Literal reference, Relative, internal or absolute URL",
+      "type": "string",
+      "isSummary": true,
+      "index": 0
+    },
+    "type": {
+      "short": "Type the reference refers to (e.g. \"Patient\")",
+      "type": "uri",
+      "isSummary": true,
+      "binding": {
+        "strength": "extensible",
+        "valueSet": "http://hl7.org/fhir/ValueSet/resource-types",
+        "bindingName": "FHIRResourceTypeExt"
+      },
+      "index": 1
+    },
+    "identifier": {
+      "short": "Logical reference, when literal reference is not known",
+      "type": "Identifier",
+      "isSummary": true,
+      "index": 2
+    },
+    "display": {
+      "short": "Text alternative for the resource",
+      "type": "string",
+      "isSummary": true,
+      "index": 3
+    }
+  }
+}

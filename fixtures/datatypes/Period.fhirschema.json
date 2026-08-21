@@ -1,0 +1,26 @@
+{
+  "name": "Period",
+  "type": "Period",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Period",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Period Type: A time period defined by a start and end date and optionally time.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "start": {
+      "short": "Starting time with inclusive boundary",
+      "type": "dateTime",
+      "isSummary": true,
+      "index": 0
+    },
+    "end": {
+      "short": "End time with inclusive boundary, if not ongoing",
+      "type": "dateTime",
+      "meaningWhenMissing": "If the end of the period is missing, it means that the period is ongoing",
+      "isSummary": true,
+      "index": 1
+    }
+  }
+}
