@@ -37,6 +37,13 @@ produced **25 fields, 23 of them `.optional()`, 18 warnings, and a dangling
 | 3 | `constraint` is an object keyed by constraint id, not an array | `{k:"constraint", t:"object"}` | `el.constraint?.length` is `undefined` → invariant TODO markers never emit |
 | 4 | Profile elements carry no `type`/`array`/`min`/`max` | `elements.name` = `{array:null, type:null, min:null, max:null}` | Everything becomes `z.unknown()`; `name` loses `array:true` |
 | 5 | No base or cross-file resolution | `ExtensionSchema` referenced but never generated | Output does not compile |
+| 6 | "my children are required" is read as "I am required" | `mapper.ts` `isRequired = el.required \|\| …`; with `required: string[]`, a non-empty array is **truthy** | `identifier: {required:["system","value"]}` makes `identifier` itself non-optional. Right answer by accident in US Core, wrong reason — and wrong wherever an optional element has required children |
+
+Defect 6 was found during Phase 1 review, not in the original sweep. It is not
+newly introduced: the data was always arrays at runtime, so the v0.1 boolean type
+was simply lying. Correcting the type made the pre-existing bug visible. The fix
+is to derive an element's requiredness from its **parent's** `required` array (or
+the document's, at the root), never from its own.
 
 **Defect #4 is architectural.** A profile (`derivation: "constraint"`) only
 restates what it *narrows*. Types and cardinality live in the **base** resource.
@@ -237,3 +244,88 @@ Prefer `fhir-package-installer` over hand-rolled registry HTTP.
   requirement, not a nicety.
 - Agents: worktree isolation, branch + PR per phase, incremental commits, plain
   commit messages with no `Co-Authored-By` trailer.
+## 7. Phase 3 design decisions (from @solarahealth/fhir-r4 prior-art read)
+
+### STEAL
+
+#### 1. Two-tier recursion strategy — the standout finding
+This is what killed `zod-fhir`, and solarahealth solved it properly in two halves:
+
+**(a) Datatype cycles** (Reference ↔ Identifier ↔ Reference, Extension self-ref):
+A cycle-detecting cache with per-key state `"creating" | "created"`. First call marks
+"creating" and runs the factory. A *re-entrant* call to the same key while still
+"creating" — i.e. a genuine cycle — returns `z.lazy(() => cache.get(key))` instead of
+recursing. Non-cyclic reuse just returns the cached instance. ~60 lines, fully general.
+Only actual cycles pay the lazy cost.
+
+**(b) Resource-containment cycles** (`Patient.contained` could contain a `Patient`):
+Do NOT eagerly build the 150-way self-referential union. Default `contained` /
+Bundle-entry-resource to `z.unknown()`, and let callers opt into a real
+`z.discriminatedUnion('resourceType', [...])` via an options param or a separate
+heavier entrypoint. More composable — callers can pass a *subset* union (e.g. just
+US Core resources).
+
+#### 2. Types-as-source-of-truth, not `z.infer`
+They emit a real `interface` with JSDoc from FHIR `short`/`definition`, then pin the
+schema factory's return type via `z.ZodType<types.Patient<...>>`. TS then catches
+schema/type drift at compile time.
+
+This is the inverse of our current `export type X = z.infer<typeof XSchema>` and it is
+better for our stated goal ("readable, shows up in autocomplete"): doc comments live on
+the type where the IDE shows them, instead of being smuggled into runtime `.describe()`
+calls. **Worth adopting** — it directly serves the project's readability requirement.
+
+#### 3. Singleton primitive schemas
+Regex-bearing primitives built once at module load, returned by reference. Cheap.
+
+#### 4. Options-parameterized factories
+`createXSchema(options)` as the general escape hatch for anything pluggable.
+
+### REJECT / DO BETTER
+
+#### 1. Choice types with no mutual-exclusivity check — a real bug
+They flatten `value[x]` into 11 independent optional keys with **no refine**. A payload
+with both `valueString` and `valueQuantity` set PASSES validation. FHIR choice types are
+0..1 of the whole group.
+
+Our approach: keep flattened keys (better ergonomics, and the discriminant is *which key
+is present*, not a value — so `z.discriminatedUnion` genuinely doesn't fit), but add a
+`.superRefine()` enforcing "at most one of these N keys is set". Cheap, closes a real
+conformance gap.
+
+#### 2. No array `.min()`/`.max()` — free win
+Zero hits across their whole schema output. `Signature.type` is FHIR 1..* but `[]` passes.
+FHIR Schema carries `min`/`max` per element; we already read them. Required repeating
+arrays get `.min(1)`.
+
+#### 3. `url: z.string().url()` is wrong — confirmed live in a published package
+WHATWG URL is stricter than FHIR's `uri` grammar. Our existing comment in `mapper.ts`
+calling this out is correct; keep `uri`/`url`/`canonical` as plain `z.string()`.
+Optional middle ground worth considering: their `uri` regex `/^\S*$/` ("no whitespace"),
+which is defensible and more permissive than `.url()`.
+
+#### 4. Silent `z.unknown()` while marketing "runtime validation"
+If we adopt default-unknown for contained/Bundle entries, say so **loudly in a comment in
+the generated output** rather than letting users assume containment is validated.
+
+#### 5. No slicing prior art exists
+They don't attempt it at all, not even US Core extension slicing. We're inventing that
+part fresh — no shortcut available.
+
+### DECISION: Zod version target
+
+They ride `zod@^3.25` but import from the `zod/v4` subpath, using v4-only APIs
+(`z.strictObject`, `z.core.output`). That's a transitional-period pattern, not
+copy-pasteable.
+
+**Our call: emit version-agnostic output.** Restrict generated code to APIs identical in
+Zod 3 and 4: `z.object`, `z.array`, `z.enum`, `z.string/number/boolean`, `z.lazy`,
+`z.union`, `z.discriminatedUnion`, `.optional()`, `.min()`, `.max()`, `.refine()`,
+`.superRefine()`. Specifically **avoid `z.strictObject`** (v4-only).
+
+Do not emit strict objects anyway — FHIR permits extensions, so stripping unknown keys is
+the safer default.
+
+Widen the dependency to `zod ^3.25 || ^4` so consumers on either major can use the
+generated schemas. This matters for the adoptability goal: `@atomic-ehr/codegen` should
+not have to pick our Zod major.
