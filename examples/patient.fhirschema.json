@@ -1,0 +1,36 @@
+{
+  "url": "http://hl7.org/fhir/StructureDefinition/Patient",
+  "name": "Patient",
+  "type": "Patient",
+  "kind": "resource",
+  "derivation": "specialization",
+  "elements": {
+    "resourceType": { "type": "code", "required": true },
+    "active": { "type": "boolean" },
+    "name": {
+      "array": true,
+      "elements": {
+        "use": {
+          "type": "code",
+          "binding": {
+            "strength": "required",
+            "valueSet": "http://hl7.org/fhir/ValueSet/name-use",
+            "codes": ["usual", "official", "temp", "nickname", "anonymous", "old", "maiden"]
+          }
+        },
+        "family": { "type": "string" },
+        "given": { "type": "string", "array": true }
+      }
+    },
+    "gender": {
+      "type": "code",
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/administrative-gender",
+        "codes": ["male", "female", "other", "unknown"]
+      }
+    },
+    "birthDate": { "type": "date" },
+    "deceasedBoolean": { "type": "boolean", "choiceOf": "deceased" }
+  }
+}
