@@ -97,9 +97,14 @@ describe("PackageSchemaSource", () => {
     expect(source.documentsForPackage("test.fhir.mini").map((d) => d.name).sort()).toEqual([
       "Extension",
       "Period",
+      "TestBindingResource",
       "birthTime",
     ]);
-    expect(source.documentsForPackage("test.fhir.mini", ["resource"])).toEqual([]);
+    // TestBindingResource (issue #10's terminology-wiring fixture) is the
+    // package's one "resource"-kind entry.
+    expect(source.documentsForPackage("test.fhir.mini", ["resource"]).map((d) => d.name)).toEqual([
+      "TestBindingResource",
+    ]);
     expect(source.documentsForPackage("test.fhir.mini", ["complex-type"])).toHaveLength(3);
     expect(() => source.documentsForPackage("hl7.fhir.r4.core")).toThrow(/was not loaded/);
   });
