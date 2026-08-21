@@ -86,6 +86,24 @@ with sushi, the IG publisher and HAPI), so the download happens once. Override
 it with `--cache-dir <dir>`. The first run for a large IG is a few hundred MB
 and about a minute; later runs read the cache.
 
+Before downloading anything, the CLI resolves and prints the full dependency
+closure — package ids, versions, what's already cached, and approximate size
+where it's actually knowable (a not-yet-cached package's size can't be shown
+without downloading it; the registry doesn't expose it). In an interactive
+terminal it asks before proceeding; a non-interactive run (CI, piped input)
+just logs the closure and continues. If everything is already cached, there's
+nothing to ask about and it proceeds straight to generation.
+
+US Core's closure is a real example of why this matters: on top of
+`hl7.fhir.r4.core`, it pulls in several terminology packages — `us.nlm.vsac`
+and `us.cdc.phinvads` among them — that exist to back `required`-strength
+ValueSet bindings with a real code list (`gender: z.enum([...])` instead of
+`gender: z.string()`). Together they're most of a ~646 MB first-run download.
+If you don't need enum expansion, `--skip-terminology` omits known
+terminology-only packages from the download entirely — required bindings
+then degrade to `z.string()` with the same `TODO(defect 2)` marker used
+whenever a binding's ValueSet can't be found at all.
+
 ## What it generates
 
 Given a FHIR Schema document for `Patient`, roughly:

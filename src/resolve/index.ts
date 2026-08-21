@@ -19,10 +19,14 @@ export type { InstallOptions, InstalledClosure } from "./install.js";
 export type { LoadedPackage } from "./package-schema-source.js";
 export type { PackageIndexEntry, PackageManifest } from "./package-index.js";
 export type { PackageSpec } from "./package-spec.js";
+export type { ClosureEntry, ClosurePreview } from "./closure-preview.js";
+export type { ClosureNode } from "./closure.js";
 export { PackageSchemaSource } from "./package-schema-source.js";
 export { PackageTerminologySource } from "./package-terminology-source.js";
 export { readPackageIndex, readPackageManifest } from "./package-index.js";
 export { installPackageClosure } from "./install.js";
+export { previewPackageClosure } from "./closure-preview.js";
+export { isKnownTerminologyPackage } from "./closure.js";
 export { parsePackageSpec, looksLikePackageSpec, formatPackageSpec } from "./package-spec.js";
 
 export interface ResolvedPackage {
