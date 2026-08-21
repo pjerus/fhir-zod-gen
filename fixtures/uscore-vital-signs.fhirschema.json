@@ -1,0 +1,361 @@
+{
+  "name": "USCoreVitalSignsProfile",
+  "type": "Observation",
+  "kind": "resource",
+  "class": "profile",
+  "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-vital-signs",
+  "version": "6.1.0",
+  "description": "To promote interoperability and adoption through common implementation, this profile is based on the base [FHIR Vital Signs Profile](http://hl7.org/fhir/R4/observation-vitalsigns.html) and defines *additional* constraints on the Observation resource to represent vital signs observations. It identifies which core elements, extensions, vocabularies, and value sets **SHALL** be present in the resource and constrains the way the elements are used when using this profile. It provides the floor for standards development for specific use cases.  This US Core profiles that are derived from this profile are listed below.",
+  "derivation": "constraint",
+  "base": "http://hl7.org/fhir/StructureDefinition/vitalsigns",
+  "elements": {
+    "status": {
+      "short": "(USCDI) registered | preliminary | final | amended +",
+      "mustSupport": true,
+      "index": 0
+    },
+    "category": {
+      "short": "(USCDI) Classification of  type of observation",
+      "type": "CodeableConcept",
+      "mustSupport": true,
+      "array": true,
+      "min": 1,
+      "index": 1,
+      "slicing": {
+        "discriminator": [
+          {
+            "type": "value",
+            "path": "coding.code"
+          },
+          {
+            "type": "value",
+            "path": "coding.system"
+          }
+        ],
+        "ordered": false,
+        "rules": "open",
+        "min": 1,
+        "slices": {
+          "VSCat": {
+            "match": {
+              "coding": [
+                {
+                  "code": "vital-signs",
+                  "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+                }
+              ]
+            },
+            "schema": {
+              "short": "(USCDI) Classification of  type of observation",
+              "type": "CodeableConcept",
+              "mustSupport": true,
+              "_required": true,
+              "index": 2,
+              "elements": {
+                "coding": {
+                  "short": "(USCDI) Code defined by a terminology system",
+                  "type": "Coding",
+                  "mustSupport": true,
+                  "array": true,
+                  "min": 1,
+                  "index": 3,
+                  "elements": {
+                    "system": {
+                      "short": "(USCDI) Identity of the terminology system",
+                      "type": "uri",
+                      "fixed": {
+                        "type": "uri",
+                        "value": "http://terminology.hl7.org/CodeSystem/observation-category"
+                      },
+                      "mustSupport": true,
+                      "index": 4
+                    },
+                    "code": {
+                      "short": "(USCDI) Symbol in syntax defined by the system",
+                      "type": "code",
+                      "fixed": {
+                        "type": "code",
+                        "value": "vital-signs"
+                      },
+                      "mustSupport": true,
+                      "index": 5
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "system"
+                  ]
+                }
+              },
+              "required": [
+                "coding"
+              ]
+            },
+            "min": 1,
+            "max": 1
+          }
+        }
+      }
+    },
+    "code": {
+      "short": "(USCDI) Coded Responses from C-CDA Vital Sign Results",
+      "mustSupport": true,
+      "binding": {
+        "strength": "extensible",
+        "valueSet": "http://hl7.org/fhir/us/core/ValueSet/us-core-vital-signs"
+      },
+      "index": 6
+    },
+    "subject": {
+      "short": "(USCDI) Who and/or what the observation is about",
+      "type": "Reference",
+      "mustSupport": true,
+      "refers": [
+        "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+      ],
+      "index": 7
+    },
+    "effective": {
+      "short": "(USCDI) Often just a dateTime for Vital Signs",
+      "mustSupport": true,
+      "choices": [
+        "effectiveDateTime",
+        "effectivePeriod"
+      ],
+      "index": 9
+    },
+    "effectiveDateTime": {
+      "short": "(USCDI) Often just a dateTime for Vital Signs",
+      "type": "dateTime",
+      "mustSupport": true,
+      "choiceOf": "effective",
+      "index": 10
+    },
+    "effectivePeriod": {
+      "short": "(USCDI) Often just a dateTime for Vital Signs",
+      "type": "Period",
+      "mustSupport": true,
+      "choiceOf": "effective",
+      "index": 11
+    },
+    "value": {
+      "short": "(USCDI) Vital Signs Value",
+      "mustSupport": true,
+      "choices": [
+        "valueQuantity",
+        "valueCodeableConcept",
+        "valueString",
+        "valueBoolean",
+        "valueInteger",
+        "valueRange",
+        "valueRatio",
+        "valueSampledData",
+        "valueTime",
+        "valueDateTime",
+        "valuePeriod"
+      ],
+      "index": 13
+    },
+    "valueQuantity": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "Quantity",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 14
+    },
+    "valueCodeableConcept": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "CodeableConcept",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 15
+    },
+    "valueString": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "string",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 16
+    },
+    "valueBoolean": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "boolean",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 17
+    },
+    "valueInteger": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "integer",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 18
+    },
+    "valueRange": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "Range",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 19
+    },
+    "valueRatio": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "Ratio",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 20
+    },
+    "valueSampledData": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "SampledData",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 21
+    },
+    "valueTime": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "time",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 22
+    },
+    "valueDateTime": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "dateTime",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 23
+    },
+    "valuePeriod": {
+      "short": "(USCDI) Vital Signs Value",
+      "type": "Period",
+      "mustSupport": true,
+      "choiceOf": "value",
+      "index": 24
+    },
+    "dataAbsentReason": {
+      "short": "(USCDI) Why the result is missing",
+      "mustSupport": true,
+      "index": 25
+    },
+    "component": {
+      "short": "(USCDI) Component observations",
+      "mustSupport": true,
+      "index": 26,
+      "elements": {
+        "code": {
+          "short": "(USCDI) Type of component observation (code / type)",
+          "mustSupport": true,
+          "binding": {
+            "strength": "extensible",
+            "valueSet": "http://hl7.org/fhir/us/core/ValueSet/us-core-vital-signs"
+          },
+          "index": 27
+        },
+        "value": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "mustSupport": true,
+          "choices": [
+            "valueQuantity",
+            "valueCodeableConcept",
+            "valueString",
+            "valueBoolean",
+            "valueInteger",
+            "valueRange",
+            "valueRatio",
+            "valueSampledData",
+            "valueTime",
+            "valueDateTime",
+            "valuePeriod"
+          ],
+          "index": 29
+        },
+        "valueQuantity": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "Quantity",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 30
+        },
+        "valueCodeableConcept": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "CodeableConcept",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 31
+        },
+        "valueString": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "string",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 32
+        },
+        "valueBoolean": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "boolean",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 33
+        },
+        "valueInteger": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "integer",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 34
+        },
+        "valueRange": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "Range",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 35
+        },
+        "valueRatio": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "Ratio",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 36
+        },
+        "valueSampledData": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "SampledData",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 37
+        },
+        "valueTime": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "time",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 38
+        },
+        "valueDateTime": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "dateTime",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 39
+        },
+        "valuePeriod": {
+          "short": "(USCDI) Vital Sign Component Value",
+          "type": "Period",
+          "mustSupport": true,
+          "choiceOf": "value",
+          "index": 40
+        },
+        "dataAbsentReason": {
+          "short": "(USCDI) Why the component result is missing",
+          "mustSupport": true,
+          "index": 41
+        }
+      }
+    }
+  },
+  "required": [
+    "category"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Ratio",
+  "type": "Ratio",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Ratio",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Ratio Type: A relationship of two Quantity values - expressed as a numerator and a denominator.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "numerator": {
+      "short": "Numerator value",
+      "type": "Quantity",
+      "isSummary": true,
+      "index": 0
+    },
+    "denominator": {
+      "short": "Denominator value",
+      "type": "Quantity",
+      "isSummary": true,
+      "index": 1
+    }
+  }
+}

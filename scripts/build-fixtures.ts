@@ -17,6 +17,10 @@
  *      elements (and US Core Blood Pressure's components) reference, into
  *      fixtures/datatypes/ — see DATATYPES below for the closed set and why
  *      it's closed.
+ *   4b. Convert US Core Blood Pressure's full base chain
+ *      (us-core-blood-pressure -> us-core-vital-signs -> vitalsigns ->
+ *      Observation) so merge/'s multi-level profile resolution (issue #5)
+ *      has real fixtures to walk, not just the leaf profile.
  *   5. Copy the ValueSet/CodeSystem pairs needed to expand the `required`
  *      bindings those StructureDefinitions use, and one conformant example,
  *      verbatim into fixtures/.
@@ -70,6 +74,26 @@ const DATATYPES = [
   "Period",
   "Quantity",
   "Reference",
+  // Added for issue #5 (multi-level profile chains): US Core Blood
+  // Pressure's base chain bottoms out at Observation, whose component
+  // value[x] choice group references these four. Verified closed the same
+  // way as the set above: translating each and walking its own `elements`
+  // for further complex-type references yields only types already in this
+  // list (or primitives) — EXCEPT Timing (see below), which is why Timing
+  // is deliberately excluded here rather than added.
+  "Annotation",
+  "Range",
+  "Ratio",
+  "SampledData",
+  // NOT included: Timing. Observation.effectiveTiming (a choice-type
+  // variant) references it, but Timing's own elements pull in Element ->
+  // Extension, and Extension.value[x] alone references 15 more datatypes
+  // that exist only to be Extension values (the same non-closure documented
+  // above for why Extension itself is excluded). Adding Timing would nearly
+  // double this list for a branch nothing here needs expanded. merge/
+  // already handles this: a type name with no SchemaSource entry resolves
+  // to a concrete `type: "Timing"` with `elements` left unexpanded — the
+  // same treatment Extension already gets, not an error.
 ];
 
 function packageUrl(id: string, version: string): string {
@@ -128,6 +152,23 @@ function main(): void {
     // 3. US Core Blood Pressure (slicing + choice types).
     const uscoreBp = readStructureDefinition(uscoreDir, "StructureDefinition-us-core-blood-pressure.json");
     writeFixture("uscore-blood-pressure.fhirschema.json", translate(uscoreBp as any));
+
+    // 3b. US Core Blood Pressure's full base chain (issue #5): its base is
+    // us-core-vital-signs (a US Core profile), whose base is vitalsigns (a
+    // FHIR core profile), whose base is Observation (the true base
+    // resource). Committing all three lets merge/'s multi-level resolution
+    // be tested against real converter output end-to-end, not just stubs.
+    const uscoreVitalSigns = readStructureDefinition(
+      uscoreDir,
+      "StructureDefinition-us-core-vital-signs.json"
+    );
+    writeFixture("uscore-vital-signs.fhirschema.json", translate(uscoreVitalSigns as any));
+
+    const vitalsigns = readStructureDefinition(r4Dir, "StructureDefinition-vitalsigns.json");
+    writeFixture("vitalsigns.fhirschema.json", translate(vitalsigns as any));
+
+    const observation = readStructureDefinition(r4Dir, "StructureDefinition-Observation.json");
+    writeFixture("observation.fhirschema.json", translate(observation as any));
 
     // 4. Complex-type datatype schemas — see DATATYPES above.
     for (const name of DATATYPES) {
