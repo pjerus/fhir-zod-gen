@@ -1,0 +1,212 @@
+{
+  "name": "USCoreBloodPressureProfile",
+  "type": "Observation",
+  "kind": "resource",
+  "class": "profile",
+  "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-blood-pressure",
+  "version": "6.1.0",
+  "description": "To promote interoperability and adoption through common implementation, this profile sets minimum expectations for the Observation resource to record, search, and fetch diastolic and systolic blood pressure observations with standard LOINC codes and UCUM units of measure. It is based on the US Core Vital Signs Profile and identifies which *additional* core elements, extensions, vocabularies, and value sets **SHALL** be present and constrains the way the elements are used when using the profile. It provides the floor for standards development for specific use cases.",
+  "derivation": "constraint",
+  "base": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-vital-signs",
+  "elements": {
+    "code": {
+      "short": "(USCDI) Blood Pressure",
+      "type": "CodeableConcept",
+      "pattern": {
+        "type": "CodeableConcept",
+        "value": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "85354-9"
+            }
+          ]
+        }
+      },
+      "mustSupport": true,
+      "index": 0
+    },
+    "component": {
+      "short": "(USCDI) Component observations",
+      "mustSupport": true,
+      "array": true,
+      "min": 2,
+      "index": 1,
+      "slicing": {
+        "discriminator": [
+          {
+            "type": "pattern",
+            "path": "code"
+          }
+        ],
+        "ordered": false,
+        "rules": "open",
+        "min": 2,
+        "slices": {
+          "systolic": {
+            "match": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "http://loinc.org",
+                    "code": "8480-6"
+                  }
+                ]
+              }
+            },
+            "schema": {
+              "short": "(USCDI) Systolic Blood Pressure",
+              "mustSupport": true,
+              "_required": true,
+              "index": 2,
+              "elements": {
+                "code": {
+                  "short": "(USCDI) Systolic Blood Pressure Code",
+                  "pattern": {
+                    "type": "CodeableConcept",
+                    "value": "[Circular Reference]"
+                  },
+                  "mustSupport": true,
+                  "type": "CodeableConcept",
+                  "index": 3
+                },
+                "valueQuantity": {
+                  "short": "(USCDI) Vital Sign Component Value",
+                  "type": "Quantity",
+                  "mustSupport": true,
+                  "index": 4,
+                  "elements": {
+                    "value": {
+                      "short": "(USCDI) Numerical value (with implicit precision)",
+                      "type": "decimal",
+                      "mustSupport": true,
+                      "index": 5
+                    },
+                    "unit": {
+                      "short": "(USCDI) Unit representation",
+                      "type": "string",
+                      "mustSupport": true,
+                      "index": 6
+                    },
+                    "system": {
+                      "short": "(USCDI) System that defines coded unit form",
+                      "type": "uri",
+                      "fixed": {
+                        "type": "uri",
+                        "value": "http://unitsofmeasure.org"
+                      },
+                      "mustSupport": true,
+                      "index": 7
+                    },
+                    "code": {
+                      "short": "(USCDI) Coded form of the unit",
+                      "type": "code",
+                      "fixed": {
+                        "type": "code",
+                        "value": "mm[Hg]"
+                      },
+                      "mustSupport": true,
+                      "index": 8
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "system",
+                    "unit",
+                    "value"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "min": 1,
+            "max": 1
+          },
+          "diastolic": {
+            "match": {
+              "code": {
+                "coding": [
+                  {
+                    "system": "http://loinc.org",
+                    "code": "8462-4"
+                  }
+                ]
+              }
+            },
+            "schema": {
+              "short": "(USCDI) Diastolic Blood Pressure",
+              "mustSupport": true,
+              "_required": true,
+              "index": 9,
+              "elements": {
+                "code": {
+                  "short": "(USCDI) Diastolic Blood Pressure Code",
+                  "pattern": {
+                    "type": "CodeableConcept",
+                    "value": "[Circular Reference]"
+                  },
+                  "mustSupport": true,
+                  "type": "CodeableConcept",
+                  "index": 10
+                },
+                "valueQuantity": {
+                  "short": "(USCDI) Vital Sign Component Value",
+                  "type": "Quantity",
+                  "mustSupport": true,
+                  "index": 11,
+                  "elements": {
+                    "value": {
+                      "short": "(USCDI) Numerical value (with implicit precision)",
+                      "type": "decimal",
+                      "mustSupport": true,
+                      "index": 12
+                    },
+                    "unit": {
+                      "short": "(USCDI) Unit representation",
+                      "type": "string",
+                      "mustSupport": true,
+                      "index": 13
+                    },
+                    "system": {
+                      "short": "(USCDI) System that defines coded unit form",
+                      "type": "uri",
+                      "fixed": {
+                        "type": "uri",
+                        "value": "http://unitsofmeasure.org"
+                      },
+                      "mustSupport": true,
+                      "index": 14
+                    },
+                    "code": {
+                      "short": "(USCDI) Coded form of the unit",
+                      "type": "code",
+                      "fixed": {
+                        "type": "code",
+                        "value": "mm[Hg]"
+                      },
+                      "mustSupport": true,
+                      "index": 15
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "system",
+                    "unit",
+                    "value"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "min": 1,
+            "max": 1
+          }
+        }
+      }
+    }
+  }
+}

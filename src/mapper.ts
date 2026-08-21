@@ -78,8 +78,13 @@ function elementToZod(
   // Extensible/preferred bindings are intentionally left as open strings —
   // FHIR permits values outside the value set for those strengths, so a
   // Zod enum would reject conformant data.
-  if (el.binding?.strength === "required" && el.binding.codes?.length) {
-    const codes = el.binding.codes.map((c) => JSON.stringify(c)).join(", ");
+  // `codes` was never a real field on FhirSchemaBinding (see
+  // fhir-schema-types.ts) — cast here only to keep this compiling against
+  // the corrected types without changing behavior. This branch is
+  // unreachable with real data today; fixing that is Phase 3's job.
+  const bindingWithCodes = el.binding as (typeof el.binding & { codes?: string[] }) | undefined;
+  if (el.binding?.strength === "required" && bindingWithCodes?.codes?.length) {
+    const codes = bindingWithCodes.codes.map((c) => JSON.stringify(c)).join(", ");
     expr = `z.enum([${codes}])`;
   } else if (el.binding && el.binding.strength !== "required") {
     // no-op, but left explicit for readability of intent
@@ -100,8 +105,15 @@ function elementToZod(
     expr += ".optional()";
   }
 
-  if (el.constraint?.length) {
-    for (const c of el.constraint) {
+  // `constraint` is a Record keyed by constraint id (see fhir-schema-types.ts),
+  // not an array — `.length` is always undefined on real data, so this
+  // branch is unreachable today. Cast only to keep the (dead) iteration
+  // compiling; fixing the guard is Phase 3's job, not this one's.
+  const constraintArray = el.constraint as unknown as
+    | Array<{ key: string; human: string }>
+    | undefined;
+  if (constraintArray?.length) {
+    for (const c of constraintArray) {
       // We don't evaluate FHIRPath here — that needs fhirpath.js at runtime.
       // Emit a comment marker so consumers know an invariant exists and can
       // wire it up with .refine() themselves, or via the planned v0.2
