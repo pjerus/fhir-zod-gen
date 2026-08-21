@@ -189,6 +189,14 @@ describe("emitDocument", () => {
     expect(source).toContain("export type Patient = z.infer<typeof PatientSchema>;");
   });
 
+  it("derives the file name from the sanitized identifier, not the raw name (issue #14)", () => {
+    const { fileName, source } = emitDocument(
+      schema({}, { name: "Actual Group", url: "http://example.org/StructureDefinition/actual-group" })
+    );
+    expect(fileName).toBe("ActualGroup.ts");
+    expect(source).toContain("export const ActualGroupSchema");
+  });
+
   it("notes a profile (derivation: constraint) narrows its base, in the header comment", () => {
     const { source } = emitDocument(
       schema(
@@ -329,5 +337,60 @@ describe("emitPackage", () => {
     const patientFile = results.find((r) => r.fileName === "Patient.ts")!;
     expect(patientFile.source).toContain('"identifier": IdentifierSchema.optional()');
     expect(patientFile.source).not.toContain("z.lazy(");
+  });
+
+  describe("issue #14: duplicate document names", () => {
+    it("two documents with the same name but different urls produce two files and two exported consts, not one overwriting the other", () => {
+      const first = schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-1" });
+      const second = schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-2" });
+
+      const results = emitPackage([first, second]);
+
+      expect(results).toHaveLength(2);
+      const fileNames = results.map((r) => r.fileName);
+      // Neither file is silently dropped, and the two names are distinct.
+      expect(new Set(fileNames).size).toBe(2);
+      // Every colliding member gets a suffix — no arbitrary "first one wins
+      // the bare name" that would depend on array order.
+      for (const name of fileNames) {
+        expect(name).toMatch(/^ExampleLipidProfile_[0-9a-z]+\.ts$/);
+      }
+
+      // Each file's own const/type identifier agrees with its file name.
+      for (const result of results) {
+        const ident = result.fileName.replace(/\.ts$/, "");
+        expect(result.source).toContain(`export const ${ident}Schema = `);
+        expect(result.source).toContain(`export type ${ident} = z.infer<typeof ${ident}Schema>;`);
+      }
+    });
+
+    it("is deterministic: re-running emitPackage over the same input produces byte-identical file names", () => {
+      const docs = [
+        schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-1" }),
+        schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-2" }),
+        schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-3" }),
+      ];
+
+      const first = emitPackage(docs).map((r) => r.fileName).sort();
+      const second = emitPackage(docs).map((r) => r.fileName).sort();
+
+      expect(second).toEqual(first);
+    });
+
+    it("a document name that isn't a valid TS identifier is sanitized in the file name too, not just the const (issue #14 point 1)", () => {
+      const results = emitPackage([schema({}, { name: "Actual Group", url: "http://example.org/StructureDefinition/actual-group" })]);
+      expect(results).toHaveLength(1);
+      expect(results[0].fileName).toBe("ActualGroup.ts");
+    });
+
+    it("a non-colliding name is left bare, with no suffix", () => {
+      const results = emitPackage([schema({}, { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" })]);
+      expect(results[0].fileName).toBe("Patient.ts");
+    });
+
+    it("throws rather than silently overwriting when two documents share the same url", () => {
+      const dup = schema({}, { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" });
+      expect(() => emitPackage([dup, { ...dup }])).toThrow(/same url/);
+    });
   });
 });

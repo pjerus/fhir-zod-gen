@@ -134,6 +134,8 @@ interface EmitContext {
   imports: Set<string>;
   /** True iff a reference from `from`'s file to `to`'s file is part of a genuine cycle and must be z.lazy()-wrapped. */
   isCyclicEdge: (from: string, to: string) => boolean;
+  /** Raw FHIR type name -> the collision-free identifier that type's own file/const/type actually uses (issue #14). */
+  resolveTypeIdentifier: (rawTypeName: string) => string;
 }
 
 function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, indent: string): string {
@@ -145,7 +147,11 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     // resolved via SchemaSource — issue #6. Cross-file reference, never
     // inlined; see this file's module comment for why lazy-vs-plain is
     // decided from the whole reference graph rather than el.isCyclic alone.
-    const typeIdent = toIdentifier(el.type);
+    // resolveTypeIdentifier (not a bare toIdentifier(el.type)) so this
+    // reference agrees with the target file's own name even when a
+    // same-batch collision forced it to carry a disambiguating suffix
+    // (issue #14).
+    const typeIdent = ctx.resolveTypeIdentifier(el.type);
     ctx.imports.add(el.type);
     expr = ctx.isCyclicEdge(ctx.currentType, el.type)
       ? `z.lazy((): z.ZodTypeAny => ${typeIdent}Schema)`
@@ -399,9 +405,11 @@ export interface EmitOptions {
  * is PascalCased across non-identifier boundaries:
  * `observation-bodyheight` -> `ObservationBodyheight`.
  *
- * The *file* name deliberately keeps the original: `observation-bodyheight.ts`
- * is a perfectly good filename, and generate.ts's barrel index re-exports by
- * path, not by identifier.
+ * Issue #14: the *file* name is now derived from this same identifier too
+ * (`ObservationBodyheight.ts`, not `observation-bodyheight.ts`) — see
+ * resolveFileIdentifiers below for why a bare toIdentifier() call isn't the
+ * whole story once two different raw names can sanitize to the same
+ * identifier, or two different documents share the same raw name outright.
  */
 export function toIdentifier(name: string): string {
   if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return name;
@@ -414,7 +422,141 @@ export function toIdentifier(name: string): string {
   return /^[0-9]/.test(joined) ? `_${joined}` : joined;
 }
 
+/**
+ * Small, deterministic, dependency-free string hash (FNV-1a, 32-bit,
+ * base36) — not cryptographic, just stable across runs and platforms.
+ * Used only to derive a short disambiguating suffix for a colliding file
+ * name (issue #14); node:crypto would work too but pulls in a Node-specific
+ * API this module otherwise avoids, since emit/ is meant to be adoptable by
+ * non-Node consumers of the same source text (design doc section 2).
+ */
+function shortHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/** One document or complex datatype that needs a file/const identifier. */
+interface NamingUnit {
+  /** Stable and unique across the whole batch: a document's canonical `url`, or a datatype's own type name (already unique — it's the registry's Map key). */
+  uniqueKey: string;
+  /** The raw FHIR Schema name/type name before sanitization — what toIdentifier() is applied to. */
+  rawName: string;
+}
+
+/**
+ * Resolves every naming unit to a collision-free, TS-identifier-safe file
+ * identifier (issue #14). `toIdentifier(rawName)` is the base; FHIR Schema
+ * names are not unique (r4.core ships five distinct StructureDefinitions
+ * all named "Example Lipid Profile"), and sanitization itself can also
+ * collapse two different raw names onto the same identifier. Either way,
+ * every member of a colliding group gets a short deterministic suffix
+ * derived from its own `uniqueKey` — not just the 2nd/3rd/... member, so
+ * which one (if any) keeps the bare name never depends on input order or on
+ * an arbitrary "first" pick.
+ *
+ * Deterministic: identical input produces identical output. Grouping is by
+ * content (the sanitized base name), not insertion order, and the suffix is
+ * a pure hash of each unit's own uniqueKey.
+ *
+ * Never silently overwrites: if two *different* uniqueKeys somehow still
+ * resolve to the same final name (a same-length hash collision, or a caller
+ * handing this the same uniqueKey twice under different raw names), this
+ * throws rather than letting the second one's file quietly clobber the
+ * first's on disk.
+ */
+function resolveFileIdentifiers(units: NamingUnit[]): Map<string, string> {
+  const groups = new Map<string, NamingUnit[]>();
+  for (const unit of units) {
+    const base = toIdentifier(unit.rawName);
+    const group = groups.get(base);
+    if (group) group.push(unit);
+    else groups.set(base, [unit]);
+  }
+
+  const resolved = new Map<string, string>();
+  const ownerOfFinalName = new Map<string, string>();
+
+  const assign = (uniqueKey: string, finalName: string): void => {
+    const existingOwner = ownerOfFinalName.get(finalName);
+    if (existingOwner !== undefined && existingOwner !== uniqueKey) {
+      throw new Error(
+        `emit/: cannot produce a unique file name for both "${existingOwner}" and "${uniqueKey}" — both resolve to ` +
+          `"${finalName}.ts". Refusing to let one silently overwrite the other on disk (issue #14).`
+      );
+    }
+    ownerOfFinalName.set(finalName, uniqueKey);
+    resolved.set(uniqueKey, finalName);
+  };
+
+  for (const [base, group] of groups) {
+    if (group.length === 1) {
+      assign(group[0].uniqueKey, base);
+      continue;
+    }
+    // A genuine collision: every member gets a suffix, including whichever
+    // would otherwise have "won" the bare name — see this function's doc
+    // comment on why no member is special-cased.
+    for (const unit of group) {
+      assign(unit.uniqueKey, `${base}_${shortHash(unit.uniqueKey)}`);
+    }
+  }
+
+  return resolved;
+}
+
+/**
+ * Builds the two lookups emitOneFile/elementToZod need to turn a raw
+ * document or datatype name into its actual, collision-free identifier
+ * (issue #14): `resolveTypeIdentifier` for cross-file references (keyed by
+ * the raw FHIR type name, which doubles as a datatype's uniqueKey), and
+ * `identifierFor` for a document's own file (keyed by its `url`).
+ *
+ * Shared by emitDocument and emitPackage so both apply the exact same
+ * disambiguation rule — emitDocument scoped to just its own document plus
+ * the datatypes it locally discovers, emitPackage across the whole batch.
+ */
+function buildIdentifierResolvers(
+  schemas: ResolvedSchema[],
+  registry: Map<string, Record<string, ResolvedElement>>
+): { identifierFor: (documentUrl: string) => string; resolveTypeIdentifier: (rawTypeName: string) => string } {
+  // Two schemas sharing a url isn't a "name collision" resolveFileIdentifiers
+  // can disambiguate — it's a different document/url pair using `url` as its
+  // uniqueKey twice, so the *later* one would silently clobber the earlier
+  // one's identifierFor(...) result no matter what name each carries. `url`
+  // is supposed to be a StructureDefinition's canonical identity; two
+  // ResolvedSchemas sharing one is a caller bug (e.g. the same document
+  // resolved and passed in twice), not something #14 asks this module to
+  // paper over.
+  const seenUrls = new Set<string>();
+  for (const s of schemas) {
+    if (seenUrls.has(s.url)) {
+      throw new Error(`emit/: two documents share the same url "${s.url}" — each document's url must be unique within a batch.`);
+    }
+    seenUrls.add(s.url);
+  }
+
+  const units: NamingUnit[] = [
+    ...schemas.map((s) => ({ uniqueKey: s.url, rawName: s.name })),
+    ...[...registry.keys()].map((typeName) => ({ uniqueKey: typeName, rawName: typeName })),
+  ];
+  const resolved = resolveFileIdentifiers(units);
+
+  // Every uniqueKey passed in above got an entry, so these fallbacks are
+  // unreachable in practice — kept as an honest default over a thrown
+  // assertion, consistent with this module's style elsewhere.
+  return {
+    identifierFor: (documentUrl) => resolved.get(documentUrl) ?? toIdentifier(documentUrl),
+    resolveTypeIdentifier: (rawTypeName) => resolved.get(rawTypeName) ?? toIdentifier(rawTypeName),
+  };
+}
+
 interface FileMeta {
+  /** The raw FHIR Schema name/type name, shown in the header comment even when the identifier below carries a disambiguating suffix. */
+  rawName: string;
   url?: string;
   kind?: string;
   base?: string;
@@ -425,27 +567,37 @@ interface FileMeta {
 
 /** Emits one .ts file's full source (header, imports, schema const, inferred type) for either a document or a registered datatype. */
 function emitOneFile(
-  name: string,
+  identifier: string,
   elements: Record<string, ResolvedElement>,
   meta: FileMeta,
   isCyclicEdge: (from: string, to: string) => boolean,
+  resolveTypeIdentifier: (rawTypeName: string) => string,
   options: EmitOptions
 ): EmitResult {
   const imports = new Set<string>();
-  const ctx: EmitContext = { warnings: [], terminology: options.terminology, currentType: name, imports, isCyclicEdge };
-  const typeName = toIdentifier(name);
-  const constName = `${typeName}Schema`;
+  const ctx: EmitContext = {
+    warnings: [],
+    terminology: options.terminology,
+    currentType: meta.rawName,
+    imports,
+    isCyclicEdge,
+    resolveTypeIdentifier,
+  };
+  const constName = `${identifier}Schema`;
 
   const body = objectSchemaBody(elements, ctx, "  ");
 
   const importLines = [...imports]
     .sort()
-    .map((typeRef) => `import { ${toIdentifier(typeRef)}Schema } from "./${typeRef}.js";`);
+    .map((rawTypeRef) => {
+      const importIdent = resolveTypeIdentifier(rawTypeRef);
+      return `import { ${importIdent}Schema } from "./${importIdent}.js";`;
+    });
 
   const header = [
     "// AUTO-GENERATED by fhir-zod-gen — do not edit by hand.",
     meta.isDatatype
-      ? `// Complex datatype: ${name} — shared, referenced by one or more resources/profiles/other datatypes in this package.`
+      ? `// Complex datatype: ${meta.rawName} — shared, referenced by one or more resources/profiles/other datatypes in this package.`
       : `// Source: ${meta.url}`,
     !meta.isDatatype ? `// Kind: ${meta.kind}${meta.base ? `, base: ${meta.base}` : ""}` : null,
     !meta.isDatatype && meta.derivation === "constraint"
@@ -458,10 +610,10 @@ function emitOneFile(
     .filter((l): l is string => l !== null)
     .join("\n");
 
-  const source = `${header}export const ${constName} = ${body};\n\nexport type ${typeName} = z.infer<typeof ${constName}>;\n`;
+  const source = `${header}export const ${constName} = ${body};\n\nexport type ${identifier} = z.infer<typeof ${constName}>;\n`;
 
   return {
-    fileName: `${name}.ts`,
+    fileName: `${identifier}.ts`,
     source,
     warnings: ctx.warnings,
   };
@@ -484,11 +636,13 @@ function emitOneFile(
 export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}): EmitResult {
   const registry = discoverNamedTypes([schema.elements]);
   const isCyclicEdge = buildCyclicEdgeChecker(registry);
+  const { identifierFor, resolveTypeIdentifier } = buildIdentifierResolvers([schema], registry);
   return emitOneFile(
-    schema.name,
+    identifierFor(schema.url),
     schema.elements,
-    { url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
+    { rawName: schema.name, url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
     isCyclicEdge,
+    resolveTypeIdentifier,
     options
   );
 }
@@ -512,21 +666,25 @@ export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}):
 export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}): EmitResult[] {
   const registry = discoverNamedTypes(schemas.map((s) => s.elements));
   const isCyclicEdge = buildCyclicEdgeChecker(registry);
+  const { identifierFor, resolveTypeIdentifier } = buildIdentifierResolvers(schemas, registry);
 
   const results: EmitResult[] = [];
   for (const schema of schemas) {
     results.push(
       emitOneFile(
-        schema.name,
+        identifierFor(schema.url),
         schema.elements,
-        { url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
+        { rawName: schema.name, url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
         isCyclicEdge,
+        resolveTypeIdentifier,
         options
       )
     );
   }
   for (const [typeName, elements] of registry) {
-    results.push(emitOneFile(typeName, elements, { isDatatype: true }, isCyclicEdge, options));
+    results.push(
+      emitOneFile(resolveTypeIdentifier(typeName), elements, { rawName: typeName, isDatatype: true }, isCyclicEdge, resolveTypeIdentifier, options)
+    );
   }
   return results;
 }
