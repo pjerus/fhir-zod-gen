@@ -239,14 +239,40 @@ export interface EmitOptions {
 }
 
 /**
+ * A FHIR Schema `name` is not guaranteed to be a valid TypeScript identifier.
+ * Base R4 alone ships `observation-bodyheight`, `CQF-Questionnaire`, and
+ * `DiagnosticReport-Genetics`; interpolating those straight into
+ * `export const <name>Schema` emits a file that does not parse.
+ *
+ * Names that are already valid identifiers pass through untouched, so the
+ * common case (`Patient`, `USCorePatientProfile`) is unaffected. Anything else
+ * is PascalCased across non-identifier boundaries:
+ * `observation-bodyheight` -> `ObservationBodyheight`.
+ *
+ * The *file* name deliberately keeps the original: `observation-bodyheight.ts`
+ * is a perfectly good filename, and generate.ts's barrel index re-exports by
+ * path, not by identifier.
+ */
+export function toIdentifier(name: string): string {
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return name;
+  const joined = name
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join("");
+  if (joined === "") return "_";
+  return /^[0-9]/.test(joined) ? `_${joined}` : joined;
+}
+
+/**
  * Emit a single .ts file (Zod schema + inferred type) for one resolved FHIR
  * Schema document (one profile or base resource, already merged with its
  * base — see src/merge/).
  */
 export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}): EmitResult {
   const ctx: EmitContext = { warnings: [], terminology: options.terminology };
-  const constName = `${schema.name}Schema`;
-  const typeName = schema.name;
+  const typeName = toIdentifier(schema.name);
+  const constName = `${typeName}Schema`;
 
   const body = objectSchemaBody(schema.elements, ctx, "  ");
 
