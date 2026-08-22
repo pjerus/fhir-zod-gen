@@ -470,12 +470,26 @@ and the mirrored diastolic block at `:144-152`:
 }
 ```
 
-This is `@atomic-ehr/fhirschema`'s own cycle-detection guard leaking into
-its output — it (incorrectly) treats the slice's inner `code` element's
-`pattern` as a repeat of a structure it already visited and truncates it to
-a sentinel string, even though there's no genuine cycle (a CodeableConcept
-pattern is a finite tree; the guard is over-triggering on structural
-repetition, not testing actual recursion).
+This is `@atomic-ehr/fhirschema`'s own cycle-detection guard leaking into its
+output. There is no genuine cycle — a CodeableConcept pattern is a small finite
+tree.
+
+**Corrected mechanism (2026-08-21).** An earlier draft of this section, and two
+independent investigations, described the cause as "structural repetition across
+slices misdetected as recursion." That is wrong, and it was verified wrong: a
+synthetic StructureDefinition with a **single** slice and nothing repeated
+reproduces it exactly.
+
+What actually distinguishes the corrupted field is that the same value is
+reachable by two paths in the result tree — `slice.match` and
+`slice.schema.elements.code.pattern.value` — and only the *second* is replaced.
+That is the signature of cycle detection keyed on object identity, which flags
+any second encounter of the same object, including a shared reference in a DAG.
+A DAG is not a cycle; separating the two requires tracking the current ancestor
+chain rather than every node visited.
+
+(Inferred from observed behavior — the converter's traversal code has not been
+read. See pjerus/fhir-zod-gen#26 for why this was not reported upstream.)
 
 **Does this block pattern-matching on these slices? No — because the design
 in §2/§3 never reads this field.** The reliable, uncorrupted source of the
