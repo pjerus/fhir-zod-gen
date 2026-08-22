@@ -92,6 +92,32 @@ describe("PackageSchemaSource", () => {
     execFileSync("tar", ["-xzf", TARBALL, "-C", scratch]);
   });
 
+  it("recovers the slice matches the converter left empty (issue #32)", () => {
+    // fixtures/raw/ holds raw StructureDefinitions rather than a package, so
+    // the index entries are stated here instead of read from a .index.json.
+    // Everything semantic still comes from the real definition on disk.
+    const rawDir = fileURLToPath(new URL("../../fixtures/raw", import.meta.url));
+    const rawPkg: LoadedPackage = {
+      name: "test.fhir.raw",
+      version: "1.0.0",
+      dir: rawDir,
+      entries: [
+        {
+          filename: "StructureDefinition-patient-citizenship.json",
+          resourceType: "StructureDefinition",
+          url: "http://hl7.org/fhir/StructureDefinition/patient-citizenship",
+          kind: "complex-type",
+          type: "Extension",
+        },
+      ],
+    };
+
+    const source = new PackageSchemaSource([rawPkg]);
+    const citizenship = source.getByUrl("http://hl7.org/fhir/StructureDefinition/patient-citizenship");
+
+    expect(citizenship?.elements?.extension?.slicing?.slices?.code?.match).toEqual({ url: "code" });
+  });
+
   it("lists a package's documents filtered by kind", () => {
     const source = new PackageSchemaSource([pkg]);
     expect(source.documentsForPackage("test.fhir.mini").map((d) => d.name).sort()).toEqual([

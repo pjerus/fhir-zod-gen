@@ -3,7 +3,7 @@
 > **Status: implemented** in `src/emit/slicing.ts` (tests in
 > `src/emit/slicing.test.ts`, runtime gate at the bottom of
 > `src/emit/regression.test.ts`). The design below was followed as written;
-> three points have been overtaken by events since it was authored, noted
+> four points have been overtaken by events since it was authored, noted
 > here rather than by editing the body:
 >
 > 1. **The matcher needed one branch this document doesn't describe.** §2's
@@ -28,6 +28,19 @@
 > whose `match` is empty and whose only other pattern source is the corrupted
 > `schema.pattern`. Both degrade to a loud warning and no constraint, exactly
 > as §4 prescribes.
+>
+> 4. **The empty-`match` case turned out to be the rule, not the exception,
+>    and is now repaired upstream of `emit/` (issue #32).** This document
+>    treats a missing `match` as a rare degradation; measured across seven
+>    IGs it is `{}` for 558 of 711 slices, which left 60 slice cardinalities
+>    unenforced in generated output. `resolve/slice-match-recovery.ts` now
+>    reads the discriminating `pattern[x]`/`fixed[x]` back off the raw
+>    StructureDefinition and writes it into `match` before `merge/` sees the
+>    document — so everything §4 and §7 say about `emit/` still holds
+>    verbatim, `emit/` still reads only `match`, and the warning path is now
+>    reached by 29 slices instead of 60. Of the two US Core profiles named
+>    above, the laboratory one recovers; the problems/health-concerns one has
+>    no pattern in its source at all and correctly still warns.
 
 **Author:** research/design subagent (no code written)
 **Scope:** de-risk Phase 3d (slicing) before dispatch. Grounded in the three
