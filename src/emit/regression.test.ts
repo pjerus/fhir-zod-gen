@@ -14,9 +14,9 @@
  * uscore-blood-pressure was previously excluded because its base
  * (http://hl7.org/fhir/us/core/StructureDefinition/us-core-vital-signs) is
  * itself a profile and merge/resolveDocument threw on multi-level chains;
- * issue #5 fixed that, so it is now in the gate. Slicing (what that fixture
- * primarily exists to exercise) is still unimplemented — the gate proves the
- * chain resolves and compiles, not that slices are honoured.
+ * issue #5 fixed that, so it is now in the gate. Slicing — what that fixture
+ * primarily exists to exercise — is implemented now, and honoured by the
+ * runtime slicing gate at the bottom of this file rather than only compiled.
  *
  * Issue #6 update: complex-typed fields are cross-file references now (see
  * emit.ts's module comment — strategy B), so a document's own .ts file no
@@ -221,10 +221,19 @@ describe("semantic gate: choice types (value[x]) validate real data", () => {
   // Minimal, hand-built payload satisfying every OTHER required field on
   // USCoreVitalSignsProfile (category, code, status, subject) so each test
   // below isolates the choice-group behavior it's actually checking.
+  //
+  // `category` was `[{}]` until slicing landed. That placeholder satisfied
+  // the array's own `.min(1)` but matches no slice, and vital-signs profiles
+  // slice `category` with a required `VSCat` (1..1) — so it now fails, and
+  // correctly: a real Vital Signs Observation must carry that category. The
+  // stand-in is filled in rather than the assertion weakened; these tests are
+  // about choice groups and just need the rest of the resource to be legal.
   const base = {
     status: "final",
     code: {},
-    category: [{}],
+    category: [
+      { coding: [{ system: "http://terminology.hl7.org/CodeSystem/observation-category", code: "vital-signs" }] },
+    ],
     subject: {},
   };
 
@@ -307,5 +316,80 @@ describe("semantic gate: choice types (value[x]) validate real data", () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues.some((i) => i.message.includes("At most one of") && i.message.includes("value[x]"))).toBe(true);
+  });
+});
+
+describe("semantic gate: slicing is enforced at runtime, not just emitted", () => {
+  // The design doc (docs/design/slicing-design.md §6) asks specifically for
+  // this: a conformant resource parses and a non-conformant one is rejected
+  // by the emitted `.superRefine` actually running, rather than the generated
+  // source merely looking right. Blood pressure is the fixture that exists
+  // for slicing — `component` is 2..* overall with `systolic` and `diastolic`
+  // slices at 1..1 each, matched on their LOINC codes.
+  const systolic = {
+    code: { coding: [{ system: "http://loinc.org", code: "8480-6" }] },
+    valueQuantity: { value: 120, unit: "mmHg" },
+  };
+  const diastolic = {
+    code: { coding: [{ system: "http://loinc.org", code: "8462-4" }] },
+    valueQuantity: { value: 80, unit: "mmHg" },
+  };
+  const base = {
+    status: "final",
+    code: { coding: [{ system: "http://loinc.org", code: "85354-9" }] },
+    category: [
+      { coding: [{ system: "http://terminology.hl7.org/CodeSystem/observation-category", code: "vital-signs" }] },
+    ],
+    subject: {},
+    effectiveDateTime: "2020-01-01T00:00:00Z",
+  };
+
+  async function loadBloodPressureSchema(): Promise<{
+    safeParse: (data: unknown) => { success: boolean; error?: { issues: { message: string }[] } };
+  }> {
+    const path = join(TMP_DIR, "USCoreBloodPressureProfile.ts");
+    const mod = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    return mod.USCoreBloodPressureProfileSchema as {
+      safeParse: (data: unknown) => { success: boolean; error?: { issues: { message: string }[] } };
+    };
+  }
+
+  it("accepts a conformant blood pressure: one component matching each slice", async () => {
+    const schema = await loadBloodPressureSchema();
+    expect(schema.safeParse({ ...base, component: [systolic, diastolic] }).success).toBe(true);
+  });
+
+  it("still accepts an extra component matching no slice — `rules: open` means unsliced members are legal", async () => {
+    // The single most important thing not to get wrong: every observed
+    // slicing block in US Core is `open`, so an unrecognised member must not
+    // be a rejection.
+    const other = { code: { coding: [{ system: "http://loinc.org", code: "8867-4" }] }, valueQuantity: { value: 60 } };
+    const schema = await loadBloodPressureSchema();
+    expect(schema.safeParse({ ...base, component: [systolic, diastolic, other] }).success).toBe(true);
+  });
+
+  it("rejects a missing slice member (no systolic), naming the slice", async () => {
+    const schema = await loadBloodPressureSchema();
+    const result = schema.safeParse({ ...base, component: [diastolic, diastolic] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes('at least 1') && i.message.includes('"systolic"'))).toBe(true);
+  });
+
+  it("rejects two members of a 1..1 slice", async () => {
+    const schema = await loadBloodPressureSchema();
+    const result = schema.safeParse({ ...base, component: [systolic, systolic, diastolic] });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((i) => i.message.includes('at most 1') && i.message.includes('"systolic"'))).toBe(true);
+  });
+
+  it("matches on the pattern's named keys only — a component carrying extra codings alongside the slice's still counts", async () => {
+    // FHIR pattern semantics are partial-match, not deep equality. A real
+    // resource routinely carries a second, local coding next to the LOINC one.
+    const schema = await loadBloodPressureSchema();
+    const withExtraCoding = {
+      ...systolic,
+      code: { coding: [{ system: "http://example.org/local", code: "SYS" }, { system: "http://loinc.org", code: "8480-6" }] },
+    };
+    expect(schema.safeParse({ ...base, component: [withExtraCoding, diastolic] }).success).toBe(true);
   });
 });

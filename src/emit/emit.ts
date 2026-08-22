@@ -75,6 +75,7 @@
 import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
 import { FHIR_PRIMITIVE_TYPES } from "../fhir-schema-types.js";
 import { expandValueSet, type TerminologySource } from "../terminology/index.js";
+import { SLICE_MATCHER_SOURCE, sliceChecksFor, sliceSuperRefine } from "./slicing.js";
 
 const PRIMITIVE_TYPES = new Set<string>(FHIR_PRIMITIVE_TYPES);
 
@@ -146,6 +147,8 @@ interface EmitContext {
   isCyclicEdge: (from: string, to: string) => boolean;
   /** Raw FHIR type name -> the collision-free identifier that type's own file/const/type actually uses (issue #14). */
   resolveTypeIdentifier: (rawTypeName: string) => string;
+  /** Set when any element in this file emitted a slice check, so emitOneFile declares the matcher exactly once. */
+  usesSliceMatcher: { value: boolean };
 }
 
 function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, indent: string): string {
@@ -239,6 +242,16 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     }
     // el.max === "*" (unbounded) or undefined: no .max() call, same as an
     // ordinary unbounded array.
+
+    // Slicing rides on top of the array's own cardinality, never replacing
+    // it: `component` is 2..* overall AND its systolic slice is 1..1 within
+    // that. See slicing.ts for why this is a count check on the array rather
+    // than a z.discriminatedUnion over the element type.
+    const checks = sliceChecksFor(name, el, ctx.warnings);
+    if (checks.length > 0) {
+      ctx.usesSliceMatcher.value = true;
+      expr += sliceSuperRefine(name, checks, indent);
+    }
   }
 
   // `required` is already correctly derived by merge/ from the PARENT's
@@ -803,6 +816,7 @@ function emitOneFile(
   options: EmitOptions
 ): EmitResult {
   const imports = new Set<string>();
+  const usesSliceMatcher = { value: false };
   const ctx: EmitContext = {
     warnings: [],
     terminology: options.terminology,
@@ -810,6 +824,7 @@ function emitOneFile(
     imports,
     isCyclicEdge,
     resolveTypeIdentifier,
+    usesSliceMatcher,
   };
   const constName = `${identifier}Schema`;
 
@@ -838,7 +853,13 @@ function emitOneFile(
     .filter((l): l is string => l !== null)
     .join("\n");
 
-  const source = `${header}export const ${constName} = ${body};\n\nexport type ${identifier} = z.infer<typeof ${constName}>;\n`;
+  // Declared per-file rather than imported from a shared runtime: the whole
+  // point of emit/ is output another project can adopt without taking a
+  // dependency on ours (see this module's comment), so a generated file has
+  // to stand on its own. Only in files that actually use it.
+  const matcher = usesSliceMatcher.value ? `${SLICE_MATCHER_SOURCE}\n\n` : "";
+
+  const source = `${header}${matcher}export const ${constName} = ${body};\n\nexport type ${identifier} = z.infer<typeof ${constName}>;\n`;
 
   return {
     fileName: `${identifier}.ts`,
