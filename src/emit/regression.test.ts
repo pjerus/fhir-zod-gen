@@ -100,7 +100,16 @@ beforeAll(() => {
   // "complex variant type", and "nested" in one fixture.
   const usCoreVitalSigns = resolveDocument(loadFixture("uscore-vital-signs.fhirschema.json"), schemaSource);
 
-  emitted = emitPackage([r4Patient, usCorePatient, usCoreBloodPressure, hyphenated, usCoreVitalSigns], { terminology });
+  // Issue #34: real converter output that narrows Observation.value[x] as a
+  // Quantity requiring value/unit/system/code, while its own
+  // referenceRange.low/high stay plain — so this one document puts two
+  // different expansions of `Quantity` into the batch, which is what used
+  // to decide the shared Quantity.ts by iteration order.
+  const r4BodyWeight = resolveDocument(loadFixture("r4-bodyweight.fhirschema.json"), schemaSource);
+
+  emitted = emitPackage([r4Patient, usCorePatient, usCoreBloodPressure, hyphenated, usCoreVitalSigns, r4BodyWeight], {
+    terminology,
+  });
 
   filePaths = emitted.map(({ fileName, source }) => {
     const path = join(TMP_DIR, fileName);
@@ -391,5 +400,76 @@ describe("semantic gate: slicing is enforced at runtime, not just emitted", () =
       code: { coding: [{ system: "http://example.org/local", code: "SYS" }, { system: "http://loinc.org", code: "8480-6" }] },
     };
     expect(schema.safeParse({ ...base, component: [withExtraCoding, diastolic] }).success).toBe(true);
+  });
+});
+
+/**
+ * Issue #34. `r4-bodyweight` requires `value`/`unit`/`system`/`code` on the
+ * Quantity it uses for `Observation.value[x]`; every other Quantity in the
+ * batch (its own referenceRange.low/high, blood pressure's components)
+ * requires nothing. One shared Quantity.ts serves them all, and it used to
+ * be whichever expansion the walk reached first — which in
+ * hl7.fhir.us.core#6.1.0 meant 11 narrowed use sites dictating terms to 590
+ * unnarrowed ones, falsely rejecting 18 of that package's own examples.
+ *
+ * Asserted on the real emitted source rather than on internals: the bug was
+ * only ever visible in the file that reaches disk.
+ */
+describe("issue #34: a profile's narrowing does not contaminate the shared datatype file", () => {
+  function quantityFile() {
+    return emitted.find((r) => r.fileName === "Quantity.ts")!;
+  }
+
+  /**
+   * Asserted over *both* batch orders, because order is the whole bug and
+   * the batch above happens to reach a plain Quantity first — verified by
+   * reverting candidateConsensus to first-wins and watching only the
+   * narrowed-first case fail.
+   */
+  it.each([
+    ["as batched above", () => quantityFile().source],
+    [
+      "with the narrowing document first",
+      () => {
+        const narrowedFirst = emitPackage(
+          [
+            resolveDocument(loadFixture("r4-bodyweight.fhirschema.json"), schemaSource),
+            resolveDocument(loadFixture("uscore-blood-pressure.fhirschema.json"), schemaSource),
+          ],
+          { terminology }
+        );
+        return narrowedFirst.find((r) => r.fileName === "Quantity.ts")!.source;
+      },
+    ],
+  ])("emits a Quantity that accepts a legal bare value (%s)", (_label, sourceOf) => {
+    const source = sourceOf();
+
+    for (const field of ["value", "unit", "system", "code"]) {
+      expect(source, `Quantity.${field} must not be required by the shared file`).toMatch(
+        new RegExp(`"${field}": [^\\n]*\\.optional\\(\\)`)
+      );
+    }
+  });
+
+  it("says which narrowing it had to give up", () => {
+    const warnings = quantityFile().warnings.join("\n");
+
+    expect(warnings).toContain("Quantity");
+    for (const field of ["value", "unit", "system", "code"]) {
+      expect(warnings).toContain(field);
+    }
+  });
+
+  it("actually accepts a Quantity carrying only a value, at runtime", async () => {
+    const mod = (await import(pathToFileURL(join(TMP_DIR, "Quantity.ts")).href)) as {
+      QuantitySchema: { safeParse(d: unknown): { success: boolean } };
+    };
+
+    expect(mod.QuantitySchema.safeParse({ value: 43 }).success).toBe(true);
+    // The shape from US Core's own Observation-cbc-hematocrit example, which
+    // this bug rejected: a UCUM quantity with no `code`.
+    expect(mod.QuantitySchema.safeParse({ value: 43, unit: "%", system: "http://unitsofmeasure.org" }).success).toBe(
+      true
+    );
   });
 });

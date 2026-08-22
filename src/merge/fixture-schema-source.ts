@@ -51,6 +51,10 @@ export function loadFixtureSchemaSource(fixturesDir: string): FixtureSchemaSourc
     "uscore-vital-signs.fhirschema.json",
     "vitalsigns.fhirschema.json",
     "observation.fhirschema.json",
+    // Issue #34: narrows Observation.value[x] as a Quantity requiring
+    // value/unit/system/code while its own referenceRange.low/high stay
+    // plain — two expansions of one named type in a single document.
+    "r4-bodyweight.fhirschema.json",
     // The specialization half of every resource's base chain (issue #23):
     // Patient -> DomainResource -> Resource. Without these, `extension`,
     // `id`, `meta`, `text` and `contained` are simply absent from every
