@@ -273,10 +273,65 @@ interface ChoiceGroup {
   required: boolean;
 }
 
+/**
+ * The `extension` element belonging on a primitive's `_<field>` sibling, or
+ * undefined when this element has no such sibling (issue #27).
+ *
+ * FHIR carries a primitive's `id` and `extension` in a sibling object keyed
+ * `_<field>` — `_questionnaire` next to `questionnaire` — never inside the
+ * value, which stays a bare JSON string/number/boolean. merge/ resolves that
+ * as `elements.extension` sitting on an element whose `type` is still the
+ * primitive; issue #24 was this emitter mistaking that submap for the
+ * field's own structure and emitting the whole field as an object.
+ *
+ * Only emitted where a profile actually attaches an extension, not for every
+ * primitive. FHIR permits `_<field>` on any of them, but across
+ * hl7.fhir.us.core#6.1.0, hl7.fhir.uv.sdc#3.0.0 and hl7.fhir.r4.core#4.0.1
+ * exactly 14 of ~807,000 resolved primitive fields carry one. Emitting the
+ * sibling universally would add hundreds of thousands of keys for no
+ * validation gain — these objects aren't strict (see this module's
+ * conventions), so an unmodelled `_<field>` is already accepted rather than
+ * rejected. Modelling it where the profile says it belongs is the whole
+ * benefit at ~0.002% of the cost.
+ */
+function primitiveExtensionSibling(
+  name: string,
+  el: ResolvedElement,
+  ctx: EmitContext
+): Record<string, ResolvedElement> | undefined {
+  if (!PRIMITIVE_TYPES.has(el.type) || !el.elements) return undefined;
+
+  const { id, extension, ...unrepresentable } = el.elements;
+  if (!extension) return undefined;
+
+  const unhandled = Object.keys(unrepresentable);
+  if (unhandled.length > 0) {
+    // Observed on four optional SDC fields (Questionnaire.item.required,
+    // .repeats, .readOnly, .answerValueSet), where the differential addresses
+    // the extension through the primitive's `value` child —
+    // `item.required.value.extension` — instead of `item.required.extension`,
+    // so the converter nests it one level deeper. Not unwrapped on a guess:
+    // `value` is the primitive's own value in FHIR's element model and has no
+    // children in the JSON representation, so what that path denotes is
+    // genuinely ambiguous. All four are optional, so none can produce a false
+    // rejection; a loud gap beats inventing a shape (CLAUDE.md).
+    ctx.warnings.push(
+      `Element "${name}" carries ${unhandled.map((c) => `"${c}"`).join(", ")} alongside its primitive type — ` +
+        `not representable on the "_${name}" extension sibling, which is an Element (id/extension) only. Skipped.`
+    );
+  }
+
+  // merge/ resolves these over `Element`, so `id` and `extension` arrive
+  // with their real types and cardinality (`extension` is 0..*) rather than
+  // being reconstructed here.
+  return id ? { id, extension } : { extension };
+}
+
 function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitContext, indent: string): string {
   const lines: string[] = [];
   const closeIndent = indent.slice(0, -2);
   const choiceGroups: ChoiceGroup[] = [];
+  const requiredSiblings: string[] = [];
 
   for (const [name, el] of Object.entries(elements)) {
     if (el.choices) {
@@ -301,16 +356,41 @@ function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitCo
       }
       continue;
     }
-    lines.push(`${indent}${JSON.stringify(name)}: ${elementToZod(name, el, ctx, indent)},`);
+    const sibling = primitiveExtensionSibling(name, el, ctx);
+    if (!sibling) {
+      lines.push(`${indent}${JSON.stringify(name)}: ${elementToZod(name, el, ctx, indent)},`);
+      continue;
+    }
+
+    // The value key goes optional even when the element is required, because
+    // FHIR lets a conformant resource carry the value's extension in the
+    // sibling and omit the value itself (US Core does exactly this for
+    // QuestionnaireResponse.questionnaire when the form isn't a FHIR
+    // Questionnaire). The requirement isn't dropped — it moves to a
+    // .superRefine() that accepts either side. Issue #27.
+    const valueEl = el.required ? { ...el, required: false } : el;
+    lines.push(`${indent}${JSON.stringify(name)}: ${elementToZod(name, valueEl, ctx, indent)},`);
+    // The sibling itself is always optional, even when the value it
+    // annotates is required: FHIR never requires `_<field>`, only that the
+    // value be obtainable from one side or the other (see superRefineChecks).
+    lines.push(
+      `${indent}${JSON.stringify(`_${name}`)}: ${objectSchemaBody(sibling, ctx, `${indent}  `)}.optional(),`
+    );
+    if (el.required) {
+      requiredSiblings.push(name);
+    }
   }
 
   const objectExpr = `z.object({\n${lines.join("\n")}\n${closeIndent}})`;
-  return choiceGroups.length > 0 ? `${objectExpr}${superRefineForChoiceGroups(choiceGroups, closeIndent)}` : objectExpr;
+  return choiceGroups.length > 0 || requiredSiblings.length > 0
+    ? `${objectExpr}${superRefineChecks(choiceGroups, requiredSiblings, closeIndent)}`
+    : objectExpr;
 }
 
 /**
- * Emits one `.superRefine()` — covering every choice group at this object
- * level, not one call per group — enforcing FHIR's actual choice-type rule:
+ * Emits one `.superRefine()` — covering every choice group AND every
+ * required primitive-extension sibling at this object level, not one call
+ * per check — enforcing FHIR's actual choice-type rule:
  * a `value[x]`-style group is 0..1 of the WHOLE group (or exactly 1 when
  * the group itself is required), never each variant independently. Design
  * doc section 7, "REJECT/DO BETTER #1": the closest prior art
@@ -331,11 +411,33 @@ function objectSchemaBody(elements: Record<string, ResolvedElement>, ctx: EmitCo
  * --strict` against an object type with specific known keys (confirmed
  * against a standalone repro before writing this) — `as const` narrows
  * `key` to the literal union of this group's actual variant names, which
- * are the object's own keys.
+ * are the object's own keys. The sibling checks below need no such
+ * narrowing — they index by two string literals rather than through an
+ * array, so `data["questionnaire"]` is already a known key.
  */
-function superRefineForChoiceGroups(groups: ChoiceGroup[], baseIndent: string): string {
+function superRefineChecks(groups: ChoiceGroup[], requiredSiblings: string[], baseIndent: string): string {
   const checkIndent = `${baseIndent}  `;
-  const checks = groups
+
+  // A required primitive whose value FHIR permits to live in its `_<field>`
+  // sibling instead (issue #27). Satisfied by either side being present —
+  // asserting on the bare key alone is the false rejection this fixes.
+  const siblingChecks = requiredSiblings.map((name) => {
+    const value = JSON.stringify(name);
+    const sibling = JSON.stringify(`_${name}`);
+    return [
+      `${checkIndent}{`,
+      `${checkIndent}  if (data[${value}] === undefined && data[${sibling}] === undefined) {`,
+      `${checkIndent}    ctx.addIssue({`,
+      `${checkIndent}      code: "custom",`,
+      `${checkIndent}      message: \`${name} is required — provide it, or carry its value as an extension on ${`_${name}`}.\`,`,
+      `${checkIndent}      path: [${value}],`,
+      `${checkIndent}    });`,
+      `${checkIndent}  }`,
+      `${checkIndent}}`,
+    ].join("\n");
+  });
+
+  const groupChecks = groups
     .map((group) => {
       const keysExpr = `[${group.variantNames.map((n) => JSON.stringify(n)).join(", ")}] as const`;
       const groupLabel = `${group.markerName}[x]`;
@@ -366,9 +468,9 @@ function superRefineForChoiceGroups(groups: ChoiceGroup[], baseIndent: string): 
         `${checkIndent}  }`,
         `${checkIndent}}`,
       ].join("\n");
-    })
-    .join("\n");
+    });
 
+  const checks = [...groupChecks, ...siblingChecks].join("\n");
   return `.superRefine((data, ctx) => {\n${checks}\n${baseIndent}})`;
 }
 

@@ -116,6 +116,11 @@ const DATATYPES = [
   "Element",
   "Narrative",
   "Meta",
+  // Added for issue #27. Every BackboneElement inherits `modifierExtension`
+  // from here and `id`/`extension` from Element, and no profile ever
+  // restates them — so without this fixture the set again misrepresents
+  // every inline backbone structure as having no inherited fields.
+  "BackboneElement",
   // NOT included: Timing. Observation.effectiveTiming (a choice-type
   // variant) references it, but Timing's own elements pull in Element ->
   // Extension, and Extension.value[x] alone references 15 more datatypes

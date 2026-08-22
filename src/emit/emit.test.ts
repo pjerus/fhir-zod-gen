@@ -181,6 +181,83 @@ describe("emitDocument", () => {
     expect(source).not.toContain('"questionnaire": z.object(');
   });
 
+  describe("primitive extensions — the `_<field>` sibling key (issue #27)", () => {
+    /**
+     * A primitive carrying an extension attached to it — the shape merge/
+     * resolves for e.g. US Core's QuestionnaireResponse.questionnaire.
+     * `id`/`extension` and `extension`'s `array: true` come from merge/
+     * resolving these children over `Element`, so they're spelled out here
+     * the way merge/ actually produces them.
+     */
+    function withSibling(type: string, required: boolean): ResolvedElement {
+      return el({
+        type,
+        required,
+        elements: {
+          id: el({ type: "string", required: false }),
+          extension: el({ type: "Extension", isNamedType: true, array: true, required: false }),
+        },
+      });
+    }
+
+    it("emits the `_<field>` sibling next to the bare primitive, not in place of it", () => {
+      const { source } = emitDocument(schema({ questionnaire: withSibling("canonical", false) }));
+      expect(source).toContain('"questionnaire": z.string().optional()');
+      expect(source).toContain('"_questionnaire": z.object({');
+      // FHIR's `_field` is an Element: id + extension, and never the value itself.
+      expect(source).toContain('"extension": z.array(ExtensionSchema).optional()');
+      expect(source).toMatch(/"_questionnaire": z\.object\(\{[^}]*"id": z\.string\(\)\.optional\(\)/s);
+      expect(source).not.toContain('"_questionnaire": z.object({\n    "value"');
+    });
+
+    it("emits no sibling for an ordinary primitive that carries no attached extension", () => {
+      const { source } = emitDocument(schema({ gender: el({ type: "code", required: true }) }));
+      expect(source).toContain('"gender": z.string(),');
+      expect(source).not.toContain('"_gender"');
+    });
+
+    it("moves a required primitive's requiredness into a .superRefine() accepting either the value or the sibling", () => {
+      // The whole false rejection: US Core requires `questionnaire`, but says
+      // to carry a non-FHIR form's URI in an extension on `_questionnaire`.
+      // Enforcing `required` on the bare key alone rejects that outright.
+      const { source } = emitDocument(schema({ questionnaire: withSibling("canonical", true) }));
+      expect(source).toContain('"questionnaire": z.string().optional()');
+      expect(source).toContain(".superRefine(");
+      expect(source).toContain('data["questionnaire"] === undefined && data["_questionnaire"] === undefined');
+    });
+
+    it("adds no .superRefine() when the primitive with a sibling is optional", () => {
+      const { source } = emitDocument(schema({ questionnaire: withSibling("canonical", false) }));
+      expect(source).not.toContain(".superRefine(");
+    });
+
+    it("emits one combined .superRefine() when a choice group and a required sibling share an object level", () => {
+      const { source } = emitDocument(
+        schema({
+          questionnaire: withSibling("canonical", true),
+          deceased: el({ type: "unknown", choices: ["deceasedBoolean"], required: false }),
+          deceasedBoolean: el({ type: "boolean", choiceOf: "deceased", required: false }),
+        })
+      );
+      expect(source.match(/\.superRefine\(/g)).toHaveLength(1);
+      expect(source).toContain('data["questionnaire"] === undefined');
+      expect(source).toContain("deceasedBoolean");
+    });
+
+    it("works on a primitive nested inside a BackboneElement, not just at the top level", () => {
+      const { source } = emitDocument(
+        schema({
+          item: el({
+            type: "BackboneElement",
+            required: false,
+            elements: { text: withSibling("string", false) },
+          }),
+        })
+      );
+      expect(source).toContain('"_text": z.object({');
+    });
+  });
+
   describe("choice types (value[x])", () => {
     function deceasedGroup(required: boolean) {
       return {
