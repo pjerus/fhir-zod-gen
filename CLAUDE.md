@@ -101,6 +101,13 @@ Read the comment before "fixing" any of these:
   evaluated. Evaluating needs fhirpath.js at runtime.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
+- **Slicing counts members, it does not partition the array.** The element
+  type stays the unsliced base type and a `.superRefine()` counts deep-matches
+  per named slice. `z.discriminatedUnion` is wrong here: `rules` is `open`
+  everywhere in the data, so members matching no slice are legal and a closed
+  union would reject them. Never read a slice's inner `schema.pattern` — the
+  converter corrupts it to `"[Circular Reference]"`; `slices[name].match` is
+  the intact copy.
 - **A primitive can legitimately carry `elements`, and it is never that
   field's own structure.** It's the contents of the `_<field>` sibling FHIR
   puts a primitive's `id`/`extension` in — so the value key stays a bare
@@ -163,10 +170,11 @@ Read the comment before "fixing" any of these:
 only open issue is #26 (evaluate the converter dependency — a recorded risk,
 explicitly no action wanted). What's actually left:
 
-- **Slicing** — specced at `docs/design/slicing-design.md` (grounded in the
-  real committed fixtures plus a scan of `hl7.fhir.us.core#6.1.0`), not
-  started. `z.discriminatedUnion` for value-type discriminators, `z.union` +
-  `.superRefine()` for pattern-type, extension slicing as its own path.
+- **Slicing beyond cardinality** — slice min/max is enforced (`emit/slicing.ts`).
+  Deliberately not enforced, each a documented decision rather than an
+  oversight: `rules: "closed"`, `ordered`/`openAtEnd`, a slice member's own
+  narrower schema, and discriminator types that never occur in our data
+  (`exists`/`type`/`profile`/`position`).
 - **FHIRPath invariants** — emitted as `/* TODO(invariant …) */` comments,
   never evaluated (would need `fhirpath.js` at runtime).
 - **Primitive regex constraints** — `id`, `code`, etc. accept any string;

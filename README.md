@@ -14,10 +14,7 @@ types, in one artifact — from FHIR Implementation Guides.
 > compilation proves nothing) and on accepting/rejecting real conformant
 > examples.
 >
-> Remaining gaps: slicing (`z.discriminatedUnion` / extension slicing) is
-> specced at
-> [`docs/design/slicing-design.md`](./docs/design/slicing-design.md) but
-> unstarted; FHIRPath invariants are emitted as `/* TODO */` comments, not
+> Remaining gaps: FHIRPath invariants are emitted as `/* TODO */` comments, not
 > evaluated; primitive regex constraints (`id`, `code`, etc.) aren't enforced
 > yet. This is a starting point to build on, not a finished validator.
 
