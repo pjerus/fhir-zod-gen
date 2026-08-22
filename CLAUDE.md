@@ -122,9 +122,8 @@ Read the comment before "fixing" any of these:
 
 ## Working with agents here
 
-- **Never run concurrent agents in the primary checkout
-  (`/Users/pat/ai-dev/fhir-zod`).** Give every concurrent agent its own worktree
-  *outside* this directory. This caused two real incidents: a commit intended for
+- **Never run concurrent agents in the primary checkout.** Give every concurrent
+  agent its own worktree *outside* the repo directory. This caused two real incidents: a commit intended for
   `main` landed on an agent's branch (the branch had been checked out underneath
   it), and separately an agent's commit landed on `main` when something else
   checked `main` out mid-task. Both were silent. One agent then reset `main` to
