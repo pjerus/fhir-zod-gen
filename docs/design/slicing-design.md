@@ -1,5 +1,34 @@
 # Slicing → Zod design
 
+> **Status: implemented** in `src/emit/slicing.ts` (tests in
+> `src/emit/slicing.test.ts`, runtime gate at the bottom of
+> `src/emit/regression.test.ts`). The design below was followed as written;
+> three points have been overtaken by events since it was authored, noted
+> here rather than by editing the body:
+>
+> 1. **The matcher needed one branch this document doesn't describe.** §2's
+>    `__fhirSliceMatches` returns false for an object pattern against an array
+>    value, and the converter is inconsistent about wrapping: US Core writes
+>    `{code:{coding:[{system,code}]}}` while genomics-reporting writes
+>    `{coding:{system,code}}` for the same always-repeating
+>    `CodeableConcept.coding`. As shipped, an object pattern met by *any*
+>    element of an array value matches. Without it, 57 of
+>    genomics-reporting's 81 conformant examples were rejected.
+> 2. **§2's note that `ExtensionSchema` is "today: `z.unknown()` with a TODO"
+>    is stale** — issue #6 made it a real cross-file reference, and #23 made
+>    `extension` correctly `array: true`, which is what lets extension slicing
+>    emit against a real array at all.
+> 3. **§7's recommendation to file the converter bug upstream was
+>    considered and declined** — see issue #26 for the maintenance-signal
+>    evidence behind that call.
+>
+> §7's hazard is not hypothetical: two US Core profiles
+> (`USCoreLaboratoryResultObservationProfile`,
+> `USCoreConditionProblemsHealthConcernsProfile`) have a `category` slice
+> whose `match` is empty and whose only other pattern source is the corrupted
+> `schema.pattern`. Both degrade to a loud warning and no constraint, exactly
+> as §4 prescribes.
+
 **Author:** research/design subagent (no code written)
 **Scope:** de-risk Phase 3d (slicing) before dispatch. Grounded in the three
 committed fixtures plus a direct scan of the real `hl7.fhir.us.core#6.1.0`
