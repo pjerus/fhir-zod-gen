@@ -535,8 +535,11 @@ function collectNamedTypeRefs(elements: Record<string, ResolvedElement>, targets
  * unregistered, it just means that occurrence's own `elements` is skipped
  * here in favor of the one that already populated the registry.
  */
-function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<string, Record<string, ResolvedElement>> {
-  const registry = new Map<string, Record<string, ResolvedElement>>();
+function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<string, DiscoveredType> {
+  // Every expansion of every named type, in first-seen order. A type gets
+  // more than one when documents in the batch disagree about it, which is
+  // what candidateConsensus resolves.
+  const candidates = new Map<string, Record<string, ResolvedElement>[]>();
   const queue: Record<string, ResolvedElement>[] = [...roots];
 
   while (queue.length > 0) {
@@ -545,8 +548,16 @@ function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<strin
       // Choice variants aren't skipped here either — see
       // collectNamedTypeRefs's doc comment above for why.
       if (el.isNamedType) {
-        if (el.elements && !registry.has(el.type)) {
-          registry.set(el.type, el.elements);
+        if (!el.elements) continue;
+        const seen = candidates.get(el.type);
+        if (seen) {
+          seen.push(el.elements);
+        } else {
+          // Enqueued once per type, not once per candidate: a type's own
+          // references are the same set whichever expansion we walk, and
+          // re-enqueueing would not terminate on a genuine cycle
+          // (Identifier <-> Reference).
+          candidates.set(el.type, [el.elements]);
           queue.push(el.elements);
         }
       } else if (el.elements) {
@@ -555,15 +566,86 @@ function discoverNamedTypes(roots: Record<string, ResolvedElement>[]): Map<strin
     }
   }
 
+  const registry = new Map<string, DiscoveredType>();
+  for (const [typeName, expansions] of candidates) {
+    registry.set(typeName, candidateConsensus(expansions));
+  }
   return registry;
 }
 
+/** The shared expansion chosen for one named type, plus what had to be given up to get there. */
+interface DiscoveredType {
+  elements: Record<string, ResolvedElement>;
+  /** Fields the chosen expansion required that some other use site did not. Empty when the batch agreed. */
+  relaxed: string[];
+}
+
+/** The field names an expansion requires. */
+function requiredFieldsOf(elements: Record<string, ResolvedElement>): Set<string> {
+  return new Set(Object.entries(elements).filter(([, el]) => el.required).map(([name]) => name));
+}
+
+/**
+ * Reconciles every expansion the batch produced for one named type into the
+ * single one its shared file can carry (issue #34).
+ *
+ * A profile may narrow a datatype where it uses it — the vital-signs family
+ * requires `value`/`unit`/`system`/`code` on its own `valueQuantity`. That
+ * constraint belongs to *that element*, but strategy B gives the whole
+ * package one `Quantity.ts`, so some single expansion has to win. Taking
+ * whichever was seen first made the winner depend on document iteration
+ * order, and in `hl7.fhir.us.core#6.1.0` the order handed 11 narrowed use
+ * sites' requirements to 590 unnarrowed ones — falsely rejecting 18 of the
+ * package's own published examples.
+ *
+ * So a field stays required only where **every** use site requires it. The
+ * result can under-enforce a narrowing (that narrowing was already being
+ * dropped at every use site that didn't win the old race) but it can never
+ * reject data some use site considers valid, which is the direction this
+ * project is required to fail in. Re-applying each profile's own narrowing
+ * at its use site is the real repair; it needs a place to put per-site
+ * constraints that doesn't exist yet.
+ */
+function candidateConsensus(expansions: Record<string, ResolvedElement>[]): DiscoveredType {
+  if (expansions.length === 1) return { elements: expansions[0], relaxed: [] };
+
+  const perExpansion = expansions.map(requiredFieldsOf);
+  const requiredEverywhere = perExpansion.reduce((acc, next) => new Set([...acc].filter((name) => next.has(name))));
+
+  // Every field some use site requires and the consensus won't. Reported
+  // even when the chosen expansion never required it — the narrowing is
+  // still being dropped, and silence is what let this go unnoticed.
+  const relaxed = [...new Set(perExpansion.flatMap((names) => [...names]))].filter(
+    (name) => !requiredEverywhere.has(name)
+  );
+
+  // Start from the least-constrained expansion: it is the likeliest to be
+  // the type's own unprofiled shape, and needs the fewest edits to reach
+  // the consensus. Ties keep first-seen order, so output stays
+  // deterministic.
+  const chosen = expansions.reduce((best, next) =>
+    requiredFieldsOf(next).size < requiredFieldsOf(best).size ? next : best
+  );
+
+  const toRelax = relaxed.filter((name) => chosen[name]?.required);
+  if (toRelax.length === 0) return { elements: chosen, relaxed };
+
+  // Cloned, never mutated in place: these ResolvedElements are the same
+  // objects the referencing documents hold, and flipping `required` on one
+  // would silently edit their output too.
+  const elements: Record<string, ResolvedElement> = {};
+  for (const [name, el] of Object.entries(chosen)) {
+    elements[name] = toRelax.includes(name) ? { ...el, required: false } : el;
+  }
+  return { elements, relaxed };
+}
+
 /** type name -> the set of other type names it references directly. */
-function buildTypeEdges(registry: Map<string, Record<string, ResolvedElement>>): Map<string, Set<string>> {
+function buildTypeEdges(registry: Map<string, DiscoveredType>): Map<string, Set<string>> {
   const edges = new Map<string, Set<string>>();
-  for (const [typeName, elements] of registry) {
+  for (const [typeName, discovered] of registry) {
     const targets = new Set<string>();
-    collectNamedTypeRefs(elements, targets);
+    collectNamedTypeRefs(discovered.elements, targets);
     edges.set(typeName, targets);
   }
   return edges;
@@ -611,7 +693,7 @@ function computeReachability(edges: Map<string, Set<string>>): Map<string, Set<s
  * other's value before it's had a chance to exist.
  */
 function buildCyclicEdgeChecker(
-  registry: Map<string, Record<string, ResolvedElement>>
+  registry: Map<string, DiscoveredType>
 ): (from: string, to: string) => boolean {
   const edges = buildTypeEdges(registry);
   const reach = computeReachability(edges);
@@ -774,7 +856,7 @@ function resolveFileIdentifiers(units: NamingUnit[]): Map<string, string> {
  */
 function buildIdentifierResolvers(
   schemas: ResolvedSchema[],
-  registry: Map<string, Record<string, ResolvedElement>>
+  registry: Map<string, DiscoveredType>
 ): { identifierFor: (documentUrl: string) => string; resolveTypeIdentifier: (rawTypeName: string) => string } {
   // Two schemas sharing a url isn't a "name collision" resolveFileIdentifiers
   // can disambiguate — it's a different document/url pair using `url` as its
@@ -816,6 +898,8 @@ interface FileMeta {
   derivation?: string;
   /** True for a shared complex-datatype file (registry entry); false for a resource/profile document. */
   isDatatype: boolean;
+  /** Datatype files only: fields a profile required here that the rest of the batch did not (issue #34). */
+  relaxedRequired?: string[];
 }
 
 /** Emits one .ts file's full source (header, imports, schema const, inferred type) for either a document or a registered datatype. */
@@ -840,6 +924,19 @@ function emitOneFile(
     primitiveRegex: options.primitiveRegex,
   };
   const constName = `${identifier}Schema`;
+
+  // Loud, not silent: the batch disagreed about this type and the shared
+  // file kept the permissive reading, so the narrowing a profile stated is
+  // not enforced anywhere. See candidateConsensus (issue #34).
+  if (meta.relaxedRequired?.length) {
+    ctx.warnings.push(
+      `Shared datatype "${meta.rawName}" is required to be permissive about ` +
+        `${meta.relaxedRequired.join(", ")}: at least one profile in this package requires ` +
+        `${meta.relaxedRequired.length === 1 ? "that field" : "those fields"} where it uses ` +
+        `${meta.rawName}, but others do not, and one shared file cannot hold both. The stricter ` +
+        `reading is not enforced at its own use site either.`
+    );
+  }
 
   const body = objectSchemaBody(elements, ctx, "  ");
 
@@ -943,9 +1040,16 @@ export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}
       )
     );
   }
-  for (const [typeName, elements] of registry) {
+  for (const [typeName, discovered] of registry) {
     results.push(
-      emitOneFile(resolveTypeIdentifier(typeName), elements, { rawName: typeName, isDatatype: true }, isCyclicEdge, resolveTypeIdentifier, options)
+      emitOneFile(
+        resolveTypeIdentifier(typeName),
+        discovered.elements,
+        { rawName: typeName, isDatatype: true, relaxedRequired: discovered.relaxed },
+        isCyclicEdge,
+        resolveTypeIdentifier,
+        options
+      )
     );
   }
   return results;

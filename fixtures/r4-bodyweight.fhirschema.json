@@ -1,0 +1,113 @@
+{
+  "name": "observation-bodyweight",
+  "type": "Observation",
+  "kind": "resource",
+  "class": "profile",
+  "url": "http://hl7.org/fhir/StructureDefinition/bodyweight",
+  "version": "4.0.1",
+  "description": "FHIR Body Weight Profile",
+  "derivation": "constraint",
+  "base": "http://hl7.org/fhir/StructureDefinition/vitalsigns",
+  "elements": {
+    "code": {
+      "short": "Body Weight",
+      "index": 0,
+      "elements": {
+        "coding": {
+          "index": 1,
+          "slicing": {
+            "discriminator": [
+              {
+                "type": "value",
+                "path": "code"
+              },
+              {
+                "type": "value",
+                "path": "system"
+              }
+            ],
+            "ordered": false,
+            "rules": "open",
+            "slices": {
+              "BodyWeightCode": {
+                "match": {
+                  "code": "29463-7",
+                  "system": "http://loinc.org"
+                },
+                "schema": {
+                  "_required": true,
+                  "index": 2,
+                  "elements": {
+                    "system": {
+                      "type": "uri",
+                      "fixed": {
+                        "type": "uri",
+                        "value": "http://loinc.org"
+                      },
+                      "index": 3
+                    },
+                    "code": {
+                      "type": "code",
+                      "fixed": {
+                        "type": "code",
+                        "value": "29463-7"
+                      },
+                      "index": 4
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "system"
+                  ]
+                },
+                "min": 1,
+                "max": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "valueQuantity": {
+      "index": 5,
+      "elements": {
+        "value": {
+          "type": "decimal",
+          "mustSupport": true,
+          "index": 6
+        },
+        "unit": {
+          "type": "string",
+          "mustSupport": true,
+          "index": 7
+        },
+        "system": {
+          "type": "uri",
+          "fixed": {
+            "type": "uri",
+            "value": "http://unitsofmeasure.org"
+          },
+          "mustSupport": true,
+          "index": 8
+        },
+        "code": {
+          "short": "Coded responses from the common UCUM units for vital signs value set.",
+          "type": "code",
+          "mustSupport": true,
+          "binding": {
+            "strength": "required",
+            "valueSet": "http://hl7.org/fhir/ValueSet/ucum-bodyweight|4.0.1",
+            "bindingName": "BodyWeightUnits"
+          },
+          "index": 9
+        }
+      },
+      "required": [
+        "code",
+        "system",
+        "unit",
+        "value"
+      ]
+    }
+  }
+}

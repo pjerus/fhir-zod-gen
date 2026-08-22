@@ -216,6 +216,16 @@ function main(): void {
     );
     writeFixture("uscore-observation-pregnancystatus.fhirschema.json", translate(uscorePregnancyStatus as any));
 
+    // 4e. R4 Body Weight (issue #34). One profile that narrows
+    // `Observation.value[x]` as a Quantity requiring value/unit/system/code,
+    // while its *own* referenceRange.low/high stay plain Quantities — so a
+    // single document carries two different expansions of one named type,
+    // which is exactly the shape that contaminated the shared datatype file.
+    // Additive like 4c: its base (vitalsigns) and every datatype it touches
+    // are already committed, so this adds one file and no new chain.
+    const bodyWeight = readStructureDefinition(r4Dir, "StructureDefinition-bodyweight.json");
+    writeFixture("r4-bodyweight.fhirschema.json", translate(bodyWeight as any));
+
     // 4d. The *specialization* half of every base chain (issue #23).
     // `translate()` emits only each layer's own differential, so base R4
     // Patient's document has no `extension`/`id`/`meta` entry at all — those
