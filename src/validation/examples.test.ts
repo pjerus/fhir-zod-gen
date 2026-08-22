@@ -29,6 +29,8 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { hasExamples, validatePackageExamples } from "./validate-examples.js";
+import { resolvePackage } from "../resolve/index.js";
+import { resolveDocument } from "../merge/index.js";
 
 const CACHE_DIR = join(homedir(), ".fhir", "packages");
 
@@ -94,3 +96,44 @@ for (const packageId of PACKAGES) {
     });
   });
 }
+
+/**
+ * Issue #37. The harness used to emit only the profiles some example
+ * matched, while the CLI emits every document in the package. Both wrote
+ * byte-identical per-profile files, but the *shared datatype* files came
+ * out of a different batch — which is how this suite reported 441/441
+ * green at the same moment the CLI's own US Core output falsely rejected
+ * 18 of that package's 174 published examples (#34).
+ *
+ * #34's fix made the shared files batch-independent, so the two agree
+ * again today. This gate is what keeps them agreeing: it pins the *set*,
+ * not the bytes. A byte comparison would pass vacuously right now and stop
+ * catching anything the moment batch-sensitivity returned somewhere else.
+ */
+describe("the ratchet emits the package the CLI does", () => {
+  for (const packageId of PACKAGES) {
+    it.skipIf(!hasExamples(packageId, CACHE_DIR))(`covers every document in ${packageId}`, async () => {
+      const { emittedDocumentUrls } = await validatePackageExamples(packageId, { cacheDir: CACHE_DIR });
+      const { source, documents } = await resolvePackage(packageId, { cacheDir: CACHE_DIR, registryUrl: "n/a" });
+
+      const emitted = new Set(emittedDocumentUrls);
+      const missing = documents
+        .filter((doc) => {
+          try {
+            resolveDocument(doc, source);
+            return !emitted.has(doc.url);
+          } catch {
+            // merge/ refuses to guess at an unreachable base; the CLI
+            // reports those as failures and emits nothing for them either.
+            return false;
+          }
+        })
+        .map((doc) => doc.url);
+
+      expect(
+        missing,
+        "documents the CLI emits and this suite never validates — its green is narrower than the artifact"
+      ).toEqual([]);
+    });
+  }
+});
