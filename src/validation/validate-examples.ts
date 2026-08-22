@@ -75,6 +75,12 @@ export interface PackageValidationResult {
   packageId: string;
   results: ExampleResult[];
   excluded: ExcludedExample[];
+  /**
+   * Canonical urls of the documents this run put through emitPackage
+   * (issue #37). Reported so the suite can assert the batch is the package
+   * the CLI emits, not a subset — the divergence that let #34 hide.
+   */
+  emittedDocumentUrls: string[];
 }
 
 export interface ValidateOptions {
@@ -169,11 +175,16 @@ export async function validatePackageExamples(
     matched.push({ file, example: raw, target, matchedVia });
   }
 
-  // Emit every distinct target once (emitPackage dedupes shared datatypes
-  // and resolves cross-type cycles consistently across the whole batch —
-  // per-target emitDocument calls would either duplicate or never emit
-  // them, per emit.ts's own module comment).
+  // The batch is the whole package, not just the profiles an example
+  // happened to match (issue #37). emitPackage's shared datatype files are
+  // a function of the batch, so a narrower batch means this suite validates
+  // schemas the CLI never writes — which is exactly how #34 stayed hidden
+  // behind a 441/441 green while the CLI's own output rejected 18 of US
+  // Core's published examples. Base types matched by resourceType fallback
+  // are added on top, since they come from a dependency rather than from
+  // this package's own documents.
   const targetsByUrl = new Map<string, ResolvedSchema>();
+  for (const resolved of profileByUrl.values()) targetsByUrl.set(resolved.url, resolved);
   for (const m of matched) targetsByUrl.set(m.target.url, m.target);
   const targets = [...targetsByUrl.values()];
 
@@ -216,7 +227,7 @@ export async function validatePackageExamples(
     });
   }
 
-  return { packageId, results, excluded };
+  return { packageId, results, excluded, emittedDocumentUrls: targets.map((t) => t.url) };
 }
 
 /** True when `packageId` has example/ resources on disk to validate against. */

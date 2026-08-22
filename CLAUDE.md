@@ -184,19 +184,21 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-#3, #5, #6, #9, #10, #14, #23, #24, #27 and #32 are closed and merged. Open:
-#26 (the converter-dependency risk record — decision to keep
-`@atomic-ehr/fhirschema` and not file upstream stands) and **#34, a live false
-rejection**. What's actually left:
+#3, #5, #6, #9, #10, #14, #23, #24, #27, #32, #34 and #37 are closed and
+merged. The only open issue is #26 — the converter-dependency risk record,
+whose decision (keep `@atomic-ehr/fhirschema`, don't vendor, don't file
+upstream) stands. What's actually left:
 
-- **#34 — a profile's narrowing contaminates a shared datatype.** The CLI's
-  whole-package output for `hl7.fhir.us.core#6.1.0` emits `Quantity` with
-  `value`/`unit`/`system`/`code` **required**; base R4 Quantity has all seven
-  elements at `min: 0`. Every US Core schema importing it then rejects a legal
-  bare `Quantity`. **The examples ratchet cannot see this** — it emits only the
-  profiles some example matched, and its shared `Quantity.ts` is the clean one,
-  so 441/441 is true for its batch and does not certify what the CLI writes.
-  Treat the ratchet as necessary but *not sufficient* until this is fixed.
+- **A shared datatype holds the consensus of its use sites, not any one
+  profile's narrowing (#34).** `emit/`'s `candidateConsensus` keeps a field
+  required only where *every* use site requires it, and warns about what it
+  gave up. This is deliberately permissive: it can under-enforce a narrowing,
+  never falsely reject. It replaced first-expansion-wins, which handed 11
+  narrowed `valueQuantity` sites' requirements to 590 unnarrowed ones and made
+  the CLI's US Core output reject **18 of that package's 174** published
+  examples. **Re-applying each profile's narrowing at its own use site is the
+  real repair and is not done** — it needs somewhere to put per-site
+  constraints that doesn't exist yet.
 - **Slice-match recovery is done (#32), and the tail is deliberate.** Across
   seven packages' generated output, unenforced slice cardinalities went
   **60 → 29** and emitted slice checks **359 → 390**. The remaining 29 are
@@ -228,6 +230,14 @@ that starts passing. It is the sharpest tool in this repo for catching a
 false rejection — it found #23, #24 and #27, none of which the unit suite
 caught, and it caught two regressions mid-fix that reasoning had missed.
 Keep the empty per-package keys rather than deleting the structure.
+
+**It emits the whole package, and a second gate keeps it that way (#37).**
+It used to emit only the profiles some example matched. Shared datatype files
+are a function of the batch, so that narrower batch validated schemas the CLI
+never wrote — which is how #34's false rejection hid behind a green 441/441.
+`emittedDocumentUrls` is asserted to cover every resolvable document in the
+package. Don't narrow that batch back down for speed: the whole-package emit
+measured at single-digit milliseconds, and the gap it closes cost a real bug.
 
 ## Two things that are now load-bearing and non-obvious
 
