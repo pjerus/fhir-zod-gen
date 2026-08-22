@@ -114,9 +114,12 @@ Read the comment before "fixing" any of these:
   type stays the unsliced base type and a `.superRefine()` counts deep-matches
   per named slice. `z.discriminatedUnion` is wrong here: `rules` is `open`
   everywhere in the data, so members matching no slice are legal and a closed
-  union would reject them. Never read a slice's inner `schema.pattern` — the
-  converter corrupts it to `"[Circular Reference]"`; `slices[name].match` is
-  the intact copy.
+  union would reject them. `slices[name].match` is the trustworthy pattern
+  source but is *usually empty* (`{}` for 558 of 711 slices) — trustworthy and
+  present are different properties, and conflating them is what hid #32. The
+  converter's corruption of a slice's inner `schema.pattern` to
+  `"[Circular Reference]"` is **selective, not universal**: reading `schema` is
+  fine behind `carriesSentinel()`, which exists for exactly that.
 - **A primitive can legitimately carry `elements`, and it is never that
   field's own structure.** It's the contents of the `_<field>` sibling FHIR
   puts a primitive's `id`/`extension` in — so the value key stays a bare
@@ -175,15 +178,26 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-#3, #5, #6, #9, #10, #14, #23, #24 and #27 are all closed and merged. The
-only open issue is #26 (evaluate the converter dependency — a recorded risk,
-explicitly no action wanted). What's actually left:
+#3, #5, #6, #9, #10, #14, #23, #24 and #27 are all closed and merged. Two
+issues are open: #26 (the converter-dependency risk record — decision to keep
+`@atomic-ehr/fhirschema` and not file upstream stands) and #32, the real work.
+What's actually left:
 
-- **Slicing beyond cardinality** — slice min/max is enforced (`emit/slicing.ts`).
-  Deliberately not enforced, each a documented decision rather than an
-  oversight: `rules: "closed"`, `ordered`/`openAtEnd`, a slice member's own
-  narrower schema, and discriminator types that never occur in our data
-  (`exists`/`type`/`profile`/`position`).
+- **Slice cardinality is enforced but mostly can't fire (#32).** `emit/slicing.ts`
+  works; the converter starves it. `slicing.slices[name].match` is `{}` for 558
+  of 711 slices, so **240 constraints with a real `min`/`max` are dropped with a
+  warning** across seven packages — 149 because the converter wrote
+  `"[Circular Reference]"` over the pattern. **196 of the 240 are recoverable
+  from the raw StructureDefinitions**, which `resolve/` already holds; the plan
+  is the #31 move (lift from raw, pass a side map, keep `emit/` pure). The
+  remaining 44 have binding/profile discriminators and must stay warnings —
+  synthesising a pattern there is the "partial enum" mistake in a different
+  costume. Measurement and plan: #26's 2026-08-22 comment and #32. **Don't
+  re-derive these numbers; they cost a session.**
+- **Slicing beyond cardinality** — deliberately not enforced, each a documented
+  decision rather than an oversight: `rules: "closed"`, `ordered`/`openAtEnd`,
+  a slice member's own narrower schema, and discriminator types that never
+  occur in our data (`exists`/`type`/`profile`/`position`).
 - **FHIRPath invariants** — emitted as `/* TODO(invariant …) */` comments,
   never evaluated (would need `fhirpath.js` at runtime).
 
