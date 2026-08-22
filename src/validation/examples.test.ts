@@ -41,13 +41,16 @@ const CACHE_DIR = join(homedir(), ".fhir", "packages");
  *     `array: false` instead of `true` (merge/resolve.ts). Real resources
  *     that actually carry extensions (the overwhelming common case for any
  *     mustSupport-heavy US-Core-style profile) get rejected outright.
- *   - issue #24: a primitive-typed element that also carries an extension
- *     slice's own `elements.extension` submap is emitted as
- *     `z.object({extension: ...})` instead of its real primitive type
- *     (emit/emit.ts's elementToZod: the `el.elements` branch is checked
- *     before the primitive-type branch). Confirmed on `canonical`
- *     (QuestionnaireResponse.questionnaire) and `string`
- *     (CodeSystem.concept.display, Questionnaire.item.text).
+ *   - issue #27: a primitive's extensions live in a sibling `_<field>` key
+ *     that isn't modelled at all, so a *required* primitive supplied only
+ *     via that sibling is rejected for being absent. Surfaced only once #24
+ *     was fixed — the wrong object shape was rejecting these resources
+ *     earlier, for a different reason, and masking it.
+ *
+ * Issue #24 (a primitive-typed element carrying an extension slice's own
+ * `elements.extension` submap emitted as `z.object({extension: ...})`
+ * instead of its real primitive type) is fixed; its entries are gone from
+ * this list.
  */
 const KNOWN_FAILURES: Record<string, string[]> = {
   "hl7.fhir.us.core#6.1.0": [
@@ -62,12 +65,8 @@ const KNOWN_FAILURES: Record<string, string[]> = {
     "Patient-example.json",
     "Patient-infant-example.json",
     "QuestionnaireResponse-glascow-coma-score.json",
-    "QuestionnaireResponse-hunger-vital-sign-example.json",
-    "QuestionnaireResponse-phq-9-example.json",
-    "QuestionnaireResponse-prapare-example.json",
   ],
   "hl7.fhir.uv.sdc#3.0.0": [
-    "CodeSystem-CSPHQ9.json",
     "Questionnaire-SDOHCC-QuestionnaireHungerVitalSign.json",
     "Questionnaire-demographics.json",
     "Questionnaire-questionnaire-sdc-profile-example-PHQ9.json",

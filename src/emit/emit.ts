@@ -189,14 +189,26 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
       expr = primitiveToZod(el.type);
       bindingTodo = `/* TODO(defect 2): required binding "${el.binding.valueSet}" could not be expanded — ${escapeForBlockComment(expansion.reason)} */`;
     }
+  } else if (PRIMITIVE_TYPES.has(el.type)) {
+    // Before the `el.elements` branch, not after (issue #24). A primitive
+    // can legitimately carry `elements` — merge/ populates
+    // `elements: { extension }` for a primitive that has an extension
+    // attached (e.g. US Core's QuestionnaireResponse.questionnaire, a
+    // `canonical` with us-core-extension-questionnaire-uri on it). Ordered
+    // the other way, that submap made the whole field emit as
+    // `z.object({ extension: ... })` and rejected the plain string every
+    // conformant instance actually carries. FHIR serializes a primitive's
+    // extensions in a *sibling* `_questionnaire` key, never inside the
+    // value, so the value's own schema is the bare primitive and the
+    // extension metadata has nowhere to go here — modelling the `_`-sibling
+    // is a separate, larger feature.
+    expr = primitiveToZod(el.type);
   } else if (el.elements && Object.keys(el.elements).length > 0) {
     // Inline structure — a BackboneElement (profile-local, never a reusable
     // named type; isNamedType is unset). Genuine named types were already
     // handled above and never reach this branch even though they too carry
     // `elements`.
     expr = objectSchemaBody(el.elements, ctx, indent + "  ");
-  } else if (PRIMITIVE_TYPES.has(el.type)) {
-    expr = primitiveToZod(el.type);
   } else {
     // A named complex type merge/ couldn't expand at all — SchemaSource has
     // no entry for it (e.g. "Extension", deliberately excluded from the

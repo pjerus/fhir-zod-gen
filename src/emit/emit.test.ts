@@ -161,6 +161,26 @@ describe("emitDocument", () => {
     expect(warnings).toHaveLength(1);
   });
 
+  it("keeps a primitive-typed element primitive even when it carries an extension slice's own elements (issue #24)", () => {
+    // Real shape, from hl7.fhir.us.core#6.1.0's QuestionnaireResponse
+    // profile: `questionnaire` is a `canonical` that also has the
+    // us-core-extension-questionnaire-uri extension attached, so merge/
+    // legitimately populates `elements: { extension }` on it. FHIR JSON puts
+    // a primitive's extensions in a *sibling* `_questionnaire` key, never
+    // inside the value, so the value's own schema is still just z.string().
+    const { source } = emitDocument(
+      schema({
+        questionnaire: el({
+          type: "canonical",
+          required: false,
+          elements: { extension: el({ type: "Extension", required: false }) },
+        }),
+      })
+    );
+    expect(source).toContain('"questionnaire": z.string().optional()');
+    expect(source).not.toContain('"questionnaire": z.object(');
+  });
+
   describe("choice types (value[x])", () => {
     function deceasedGroup(required: boolean) {
       return {
