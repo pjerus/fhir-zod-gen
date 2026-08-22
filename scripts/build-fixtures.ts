@@ -261,6 +261,35 @@ function main(): void {
       join("examples", "uscore-patient-example.json")
     );
 
+    // 7. Raw StructureDefinitions, copied verbatim (issue #32).
+    //
+    // Every other fixture here is converter *output*. These three are
+    // converter *input*, because slice-match recovery exists precisely to
+    // read what the converter didn't carry across — a converted document
+    // cannot be the fixture for that. Chosen as the smallest real
+    // definitions covering the three distinct shapes:
+    //
+    //   patient-citizenship          extension slicing; the discriminating
+    //                                `fixedUri` sits one level down on
+    //                                `extension:code.url`. This is the
+    //                                dominant shape (302 of 379 recoverable
+    //                                pattern entries across seven packages).
+    //   us-core-observation-lab      `patternCodeableConcept` on the slice
+    //                                head itself, and the case where the
+    //                                converter wrote "[Circular Reference]"
+    //                                over its copy.
+    //   example-composition          two sliced elements with no pattern
+    //                                anywhere — the negative case, which
+    //                                must stay unrecovered rather than
+    //                                acquire an invented match.
+    for (const [dir, sdFile] of [
+      [r4Dir, "StructureDefinition-patient-citizenship.json"],
+      [uscoreDir, "StructureDefinition-us-core-observation-lab.json"],
+      [r4Dir, "StructureDefinition-example-composition.json"],
+    ] as const) {
+      copyFixture(join(dir, sdFile), join("raw", sdFile));
+    }
+
     console.log("\nDone. Review `git diff --stat fixtures/` before committing.");
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
