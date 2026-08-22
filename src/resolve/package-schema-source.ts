@@ -39,6 +39,7 @@ import { translate } from "@atomic-ehr/fhirschema";
 import type { FhirSchemaDocument } from "../fhir-schema-types.js";
 import type { SchemaSource } from "../merge/schema-source.js";
 import type { PackageIndexEntry } from "./package-index.js";
+import { recoverSliceMatches } from "./slice-match-recovery.js";
 
 /** A package that is already on disk and indexed. */
 export interface LoadedPackage {
@@ -183,6 +184,11 @@ export class PackageSchemaSource implements SchemaSource {
     try {
       const structureDefinition = JSON.parse(readFileSync(path, "utf-8")) as StructureDefinitionInput;
       document = translate(structureDefinition) as unknown as FhirSchemaDocument;
+      // The raw definition is only in scope here, and it is the only place
+      // most slices' discriminating patterns survive — see issue #32 and
+      // slice-match-recovery.ts. Same reach-around as primitiveRegexes()
+      // below, applied at the one point that holds both forms at once.
+      recoverSliceMatches(structureDefinition, document);
     } catch (err) {
       // A single unconvertible StructureDefinition must not abort a package
       // run, but it must be visible: merge/ will report the resulting
