@@ -140,6 +140,22 @@ slicing, unresolvable-type fallbacks) — exact counts aren't cited here since
 they shift as those gaps close; check `-v` output against a given commit if
 you need a number.
 
+### Against real example resources
+
+Compiling isn't the same as being *right*, so the generated schemas are also
+run against the conformance-tested example resources four of these packages
+ship in their own `package/example/` directory — the closest thing to ground
+truth available offline. `src/validation/examples.test.ts` gates on the
+result and ratchets in both directions: a new failure fails the build, and
+so does a known failure that starts passing without being removed from the
+list.
+
+**440 of 441 matched examples validate.** The one remaining is a documented
+false rejection with an open issue (#27 — a required primitive whose value
+FHIR permits to be carried in its `_field` sibling key, which isn't modelled
+yet). Bundles and resources with no resolvable profile are excluded rather
+than counted as passes.
+
 ## What it generates
 
 Given a FHIR Schema document for `Patient`, roughly:

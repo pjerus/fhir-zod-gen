@@ -144,10 +144,18 @@ describe("compile gate: generated output (documents + shared datatypes) must com
   it("the genuine Identifier <-> Reference cycle is emitted as z.lazy() on both sides, not z.unknown()", () => {
     const identifier = emitted.find((r) => r.fileName === "Identifier.ts")!;
     const reference = emitted.find((r) => r.fileName === "Reference.ts")!;
-    expect(identifier.source).toContain("z.lazy(");
-    expect(reference.source).toContain("z.lazy(");
-    expect(identifier.source).not.toContain("z.unknown()");
-    expect(reference.source).not.toContain("z.unknown()");
+    // Asserted on the two cycle-forming fields specifically, not on the
+    // whole file. The file-wide `not.toContain("z.unknown()")` this replaces
+    // became the wrong question once issue #23 landed: Identifier and
+    // Reference specialize Element, so they now correctly inherit its
+    // `extension`, and Extension is deliberately absent from the fixture
+    // SchemaSource (see merge/resolve.ts's module comment) — so an unrelated
+    // field legitimately degrades to z.unknown() in this fixture-only build.
+    // Narrowing to `assigner`/`identifier` keeps the real subject of the
+    // test — that a genuine two-file cycle resolves to z.lazy() rather than
+    // being given up on — while dropping a coincidence it was never about.
+    expect(identifier.source).toContain('"assigner": z.lazy((): z.ZodTypeAny => ReferenceSchema)');
+    expect(reference.source).toContain('"identifier": z.lazy((): z.ZodTypeAny => IdentifierSchema)');
   });
 
   it("a non-cyclic complex-typed field (e.g. Patient.name -> HumanName) is a plain reference, not z.lazy()", () => {

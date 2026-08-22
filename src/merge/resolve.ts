@@ -1,10 +1,11 @@
 /**
- * Profile-over-base element resolution. Pure — no network, no fs reads.
- * Every lookup goes through the injected SchemaSource (see schema-source.ts);
- * this file never touches the outside world. That's what lets Phase 4 swap
- * a real IG-package-backed SchemaSource in without touching a line here.
+ * Element resolution over a document's base chain. Pure — no network, no fs
+ * reads. Every lookup goes through the injected SchemaSource (see
+ * schema-source.ts); this file never touches the outside world. That's what
+ * lets Phase 4 swap a real IG-package-backed SchemaSource in without
+ * touching a line here.
  *
- * ## Why a profile needs its base at all
+ * ## Why a document needs its base at all
  *
  * A FHIR profile (`derivation: "constraint"`) only restates what it
  * *narrows* — concrete `type`/`array`/`min`/`max` live on the base resource
@@ -14,6 +15,23 @@
  * element's `type` names another complex type (e.g. "name" -> HumanName),
  * since a resolved element's own field list comes from that type's
  * StructureDefinition, not from the profile.
+ *
+ * The same is true one rung further down, and missing it was issue #23. A
+ * `specialization` — base R4 Patient, HumanName, Extension, every core type
+ * — is *also* only its own layer. `translate()` reads a differential, so
+ * Patient's document lists `identifier`/`name`/`gender`/... and none of
+ * `id`, `meta`, `implicitRules`, `language`, `text`, `contained`,
+ * `extension`, `modifierExtension`: those live on DomainResource and
+ * Resource, which Patient specializes. HumanName's likewise omits `id` and
+ * `extension`, which live on Element. An earlier version of this file
+ * terminated the walk at the first non-profile, on the stated assumption
+ * that a "true base resource/type" was "already self-sufficient". It isn't,
+ * and the cost was silent: every generated schema was missing its inherited
+ * fields, and because `array: true` for `extension` is stated *only* on
+ * DomainResource, every profile that sliced `extension` resolved it as a
+ * scalar and rejected any resource carrying one. Both `constraint` and
+ * `specialization` therefore walk their base; the only asymmetry is what
+ * happens when the base can't be found (see resolveDocumentOverBaseChain).
  *
  * ## Merge semantics
  *
@@ -130,6 +148,68 @@ function tighterMax(a: number | "*" | undefined, b: number | "*" | undefined): n
   return Math.min(a, b);
 }
 
+/** JSON with object keys sorted, so two structurally equal values compare equal regardless of key order. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, val: unknown) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val as object).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val
+  );
+}
+
+/** An element's own scalar schema — everything except the two fields that describe its children rather than itself. */
+function ownSchemaOf(el: FhirSchemaElement): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...el };
+  delete rest.slicing;
+  delete rest.elements;
+  return rest;
+}
+
+/**
+ * Strips a sliced element's own schema when that schema is really a copy of
+ * its first slice's, leaving only `slicing` and `elements` (issue #23).
+ *
+ * A FHIR differential expresses slicing as a *container* row
+ * (`Patient.extension`, carrying the discriminator) plus one row per slice
+ * (`Patient.extension` + `sliceName: "race"`). A profile that only adds
+ * slices — never re-stating the container — has no container row at all, and
+ * `@atomic-ehr/fhirschema` then hoists the FIRST slice's schema onto the
+ * container element it synthesises. us-core-patient is exactly this shape:
+ * six `sliceName` rows, no container row, and the resulting `extension`
+ * element carries `min: 0, max: 1` — the cardinality of `us-core-race`, not
+ * of `Patient.extension`, which is `0..*` like every DomainResource's. Taken
+ * at face value that emitted `z.array(ExtensionSchema).max(1)` and rejected
+ * any resource carrying two extensions, which is most real US Core data.
+ *
+ * The container has genuinely said nothing about itself in that case, so the
+ * honest merge is to let the base speak for it entirely — hence dropping its
+ * own fields rather than trying to correct them. `slicing` and `elements`
+ * are kept: those are the container's, not the hoisted slice's.
+ *
+ * Detected by structural equality against the first slice rather than by
+ * name, because the converter preserves no `sliceName` on the hoisted copy.
+ * Measured against the differentials it was derived from — the ground truth
+ * being "does a container row exist?" — over 197 sliced elements in
+ * hl7.fhir.us.core, us.mcode, uv.sdc, uv.genomics-reporting and r5.core:
+ * **zero** false positives, 13 false negatives. Both error directions were
+ * checked, and the asymmetry is the point — a false positive would discard a
+ * real container cardinality (`us-core-blood-pressure.component` is a
+ * genuine `2..*`, and its differential does have a container row), while a
+ * false negative merely leaves this bug in place for that element. Errs
+ * toward doing nothing.
+ */
+function withoutHoistedSliceSchema(el: FhirSchemaElement | undefined): FhirSchemaElement | undefined {
+  const slices = el?.slicing?.slices;
+  if (!el || !slices) return el;
+
+  const firstSlice = slices[Object.keys(slices)[0]];
+  if (!firstSlice?.schema) return el;
+
+  if (canonicalJson(ownSchemaOf(el)) !== canonicalJson(ownSchemaOf(firstSlice.schema))) return el;
+
+  return { slicing: el.slicing, elements: el.elements };
+}
+
 /**
  * Resolve one FHIR Schema document (profile or base resource) to a
  * ResolvedSchema with every element's type/array/min/max concrete.
@@ -138,14 +218,18 @@ function tighterMax(a: number | "*" | undefined, b: number | "*" | undefined): n
  * profile (`us-core-blood-pressure -> us-core-vital-signs -> vitalsigns ->
  * Observation` is four levels — 15 of 49 US Core resource profiles hit this
  * shape, see issue #5). Each layer resolves over the one beneath it,
- * outermost profile last, until a document with `derivation` other than
- * `"constraint"` (a true base resource/type) terminates the walk.
+ * outermost profile last, and the walk continues past the last profile
+ * through the specializations underneath it (`Observation ->
+ * DomainResource -> Resource`), terminating only at a document that
+ * declares no base at all — in R4 that is exactly `Resource` and `Element`.
  *
- * Throws if `doc` (or any profile in its base chain) declares no base, or
- * if a base URL can't be resolved through `source` — without the base
+ * Throws if a *profile* in the chain declares no base, or if a profile's
+ * base URL can't be resolved through `source` — without the base
  * there is no principled way to fill in the missing type/array/min/max, and
  * silently emitting z.unknown() there is exactly the defect this project
- * exists to fix. Also throws if the base chain is circular (A's base is B,
+ * exists to fix. A *specialization* whose base is missing degrades instead
+ * of throwing: its own elements are already concrete, so it loses only the
+ * inherited ones. Also throws if the base chain is circular (A's base is B,
  * B's base is A, or a node reaches itself transitively) — that's malformed
  * input, not a case to walk forever or blow the stack on. This is a
  * document/URL-level cycle guard, a different axis from `resolveTypeElements`'s
@@ -198,27 +282,42 @@ function resolveDocumentOverBaseChain(
   const nextVisitedUrls = new Set(visitedUrls);
   nextVisitedUrls.add(doc.url);
 
-  if (doc.derivation !== "constraint") {
-    // True base resource/type: nothing to merge over, its own elements are
-    // already self-sufficient.
-    return {
-      elements: resolveElementMap(doc.elements ?? {}, undefined, doc.required, source, cache),
-      required: doc.required,
-    };
-  }
+  const isProfile = doc.derivation === "constraint";
+
+  const standalone = () => ({
+    elements: resolveElementMap(doc.elements ?? {}, undefined, doc.required, source, cache),
+    required: doc.required,
+  });
 
   if (!doc.base) {
-    throw new Error(
-      `resolveDocument: "${doc.url}" is a profile (derivation: "constraint") but declares no base — ` +
-        `there is nothing to resolve its narrowed elements against.`
-    );
+    if (isProfile) {
+      throw new Error(
+        `resolveDocument: "${doc.url}" is a profile (derivation: "constraint") but declares no base — ` +
+          `there is nothing to resolve its narrowed elements against.`
+      );
+    }
+    // The true root of a chain (R4's `Resource` and `Element` are the only
+    // two): nothing above it, its own elements are all there is.
+    return standalone();
   }
+
   const baseDoc = source.getByUrl(doc.base);
   if (!baseDoc) {
-    throw new Error(
-      `resolveDocument: base "${doc.base}" for profile "${doc.url}" was not found via SchemaSource.getByUrl. ` +
-        `A profile's concrete type/array/min/max live on its base — inject a SchemaSource that has it.`
-    );
+    if (isProfile) {
+      throw new Error(
+        `resolveDocument: base "${doc.base}" for profile "${doc.url}" was not found via SchemaSource.getByUrl. ` +
+          `A profile's concrete type/array/min/max live on its base — inject a SchemaSource that has it.`
+      );
+    }
+    // Asymmetric on purpose. A profile without its base is unresolvable —
+    // it states only narrowings, so silently emitting z.unknown() there is
+    // the defect this project exists to fix. A specialization's own
+    // elements are already concrete; a missing base costs it only the
+    // *inherited* ones, which is a real but much smaller gap than refusing
+    // to resolve the document at all. Reached whenever a SchemaSource
+    // doesn't carry the FHIR core chain (e.g. merge/'s own fixture source
+    // before DomainResource/Resource were committed).
+    return standalone();
   }
 
   const baseResolved = resolveDocumentOverBaseChain(baseDoc, nextVisitedUrls, source, cache);
@@ -279,10 +378,11 @@ function resolveOneElement(
   // than the top-level one it points at). Only consulted when there's no
   // profile-chain `resolvedBase` already, since the two mechanisms haven't
   // been observed to co-occur on one element.
-  const effectiveBase = resolvedBase ?? resolveElementReference(rawEl?.elementReference, source, cache);
+  const ownEl = withoutHoistedSliceSchema(rawEl);
+  const effectiveBase = resolvedBase ?? resolveElementReference(ownEl?.elementReference, source, cache);
 
-  const type = rawEl?.type ?? effectiveBase?.type;
-  const array = rawEl?.array ?? effectiveBase?.array ?? false;
+  const type = ownEl?.type ?? effectiveBase?.type;
+  const array = ownEl?.array ?? effectiveBase?.array ?? false;
   // Tighter, not "profile wins": a profile is only ever supposed to narrow
   // cardinality, never loosen it, but nothing upstream validates that
   // (merge/ is a resolver, not a profile validator — see the module
@@ -296,8 +396,8 @@ function resolveOneElement(
   // fully-reduced value from every layer beneath it (`effectiveBase.min`/
   // `.max`), not against the immediate base alone, so a widening attempt at
   // any layer — not just the outermost one — is caught (issue #3).
-  const min = Math.max(rawEl?.min ?? 0, effectiveBase?.min ?? 0);
-  const max = tighterMax(rawEl?.max, effectiveBase?.max);
+  const min = Math.max(ownEl?.min ?? 0, effectiveBase?.min ?? 0);
+  const max = tighterMax(ownEl?.max, effectiveBase?.max);
   // OR, not replace: `requiredNames` is converted from a differential, so
   // it only lists names THIS layer's differential newly marks required —
   // silence about a name doesn't mean "not required", it means "unchanged
@@ -315,15 +415,15 @@ function resolveOneElement(
     min,
     max,
     required,
-    binding: rawEl?.binding ?? effectiveBase?.binding,
-    constraint: rawEl?.constraint ?? effectiveBase?.constraint,
-    choices: rawEl?.choices ?? effectiveBase?.choices,
-    choiceOf: rawEl?.choiceOf ?? effectiveBase?.choiceOf,
-    mustSupport: rawEl?.mustSupport ?? effectiveBase?.mustSupport,
-    short: rawEl?.short ?? effectiveBase?.short,
-    refers: rawEl?.refers ?? effectiveBase?.refers,
-    slicing: rawEl?.slicing ?? effectiveBase?.slicing,
-    extensions: rawEl?.extensions ?? effectiveBase?.extensions,
+    binding: ownEl?.binding ?? effectiveBase?.binding,
+    constraint: ownEl?.constraint ?? effectiveBase?.constraint,
+    choices: ownEl?.choices ?? effectiveBase?.choices,
+    choiceOf: ownEl?.choiceOf ?? effectiveBase?.choiceOf,
+    mustSupport: ownEl?.mustSupport ?? effectiveBase?.mustSupport,
+    short: ownEl?.short ?? effectiveBase?.short,
+    refers: ownEl?.refers ?? effectiveBase?.refers,
+    slicing: ownEl?.slicing ?? effectiveBase?.slicing,
+    extensions: ownEl?.extensions ?? effectiveBase?.extensions,
   };
 
   if (!type) {
@@ -337,7 +437,7 @@ function resolveOneElement(
 
   let childResolvedBase = effectiveBase?.elements;
 
-  if (!rawEl?.type && effectiveBase?.isCyclic) {
+  if (!ownEl?.type && effectiveBase?.isCyclic) {
     // This exact node was already determined to be a cyclic dead-end when
     // its base was resolved (e.g. it's Reference.identifier reached again
     // through a later profile layer's overlay), and this layer doesn't
@@ -379,12 +479,12 @@ function resolveOneElement(
   // Primitives: no structure to expand; childResolvedBase stays whatever
   // resolvedBase already had (normally undefined).
 
-  const rawNestedElements = rawEl?.elements;
+  const rawNestedElements = ownEl?.elements;
   if (rawNestedElements || childResolvedBase) {
     resolved.elements = resolveElementMap(
       rawNestedElements ?? {},
       childResolvedBase,
-      rawEl?.required,
+      ownEl?.required,
       source,
       cache
     );
@@ -457,12 +557,25 @@ function resolveElementReference(
 }
 
 /**
- * Resolve a named complex type's own elements via SchemaSource, cached and
- * cycle-guarded by type name. Datatype documents (HumanName, Identifier,
- * ...) are themselves specializations with fully concrete elements already
- * (verified: every fixtures/datatypes/*.json has `derivation:
- * "specialization"`) — there's no profile layer to merge at this step, just
- * recursive expansion of each field's own type.
+ * Resolve a named complex type's elements via SchemaSource, cached and
+ * cycle-guarded by type name.
+ *
+ * Goes through resolveDocumentOverBaseChain rather than expanding
+ * `typeDoc.elements` directly. An earlier version did the latter, reasoning
+ * that datatype documents "are themselves specializations with fully
+ * concrete elements already — there's no profile layer to merge at this
+ * step". The first half is true and the conclusion doesn't follow: a
+ * specialization inherits from its base just as a profile does, and
+ * `translate()` emits only each layer's own differential. HumanName's
+ * document has no `id` and no `extension`; both live on Element, which it
+ * specializes. Expanding it standalone silently dropped them from every
+ * complex type in every generated file (issue #23, the datatype half —
+ * `resolveDocumentOverBaseChain` is the resource half).
+ *
+ * `visitedUrls` starts empty here on purpose: it guards the base-resource
+ * axis, and this is the entry point of a fresh walk up a *type's* chain.
+ * Recursion on the type axis is guarded by `cache` instead, which is shared
+ * across both and already marked "creating" for `typeName` below.
  */
 function resolveTypeElements(
   typeName: string,
@@ -489,7 +602,7 @@ function resolveTypeElements(
   }
 
   cache.set(typeName, { state: "creating" });
-  const elements = resolveElementMap(typeDoc.elements ?? {}, undefined, typeDoc.required, source, cache);
+  const { elements } = resolveDocumentOverBaseChain(typeDoc, new Set<string>(), source, cache);
   cache.set(typeName, { state: "created", elements });
   return { status: "resolved", elements };
 }

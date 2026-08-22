@@ -35,6 +35,11 @@
  *      base is plain Observation (already fixture'd) and its element types
  *      (CodeableConcept, Reference) are already in DATATYPES below, so this
  *      is a single additive file isolating exactly the one new variable.
+ *   4d. Convert DomainResource and Resource — the `specialization` half of
+ *      every resource's base chain (issue #23). Patient's own document
+ *      restates none of `id`/`meta`/`text`/`contained`/`extension`; they
+ *      live one and two levels up, and `DomainResource.extension` is the
+ *      only place `array: true` is stated for it.
  *   5. Copy the ValueSet/CodeSystem pairs needed to expand the `required`
  *      bindings those StructureDefinitions use, and one conformant example,
  *      verbatim into fixtures/.
@@ -99,6 +104,18 @@ const DATATYPES = [
   "Range",
   "Ratio",
   "SampledData",
+  // Added for issue #23 (specializations inherit from their base). Element
+  // is what every complex type above specializes, so it's where their
+  // `id`/`extension` come from; Narrative and Meta are the two types
+  // DomainResource/Resource reference (`text`, `meta`) and would otherwise
+  // resolve to a concrete-but-unexpanded type on every resource fixture.
+  // Verified closed the same way as the sets above: Element's own elements
+  // are `id` (primitive) and `extension` (Extension, deliberately excluded
+  // throughout), Narrative's are `status`/`div` (both primitive), and
+  // Meta's further references (Coding) are already listed here.
+  "Element",
+  "Narrative",
+  "Meta",
   // NOT included: Timing. Observation.effectiveTiming (a choice-type
   // variant) references it, but Timing's own elements pull in Element ->
   // Extension, and Extension.value[x] alone references 15 more datatypes
@@ -193,6 +210,23 @@ function main(): void {
       "StructureDefinition-us-core-observation-pregnancystatus.json"
     );
     writeFixture("uscore-observation-pregnancystatus.fhirschema.json", translate(uscorePregnancyStatus as any));
+
+    // 4d. The *specialization* half of every base chain (issue #23).
+    // `translate()` emits only each layer's own differential, so base R4
+    // Patient's document has no `extension`/`id`/`meta` entry at all — those
+    // live on DomainResource and Resource, which Patient inherits from via
+    // `derivation: "specialization"` rather than `"constraint"`. Without
+    // these two fixtures the fixture set silently misrepresents every
+    // resource as having no inherited fields, which is exactly why #23 went
+    // unnoticed: `DomainResource.extension` is where `array: true` actually
+    // lives. Element is the datatype-side counterpart (HumanName and every
+    // other complex type specialize it, inheriting `id`/`extension`).
+    for (const [fixtureName, sdFile] of [
+      ["r4-domainresource.fhirschema.json", "StructureDefinition-DomainResource.json"],
+      ["r4-resource.fhirschema.json", "StructureDefinition-Resource.json"],
+    ] as const) {
+      writeFixture(fixtureName, translate(readStructureDefinition(r4Dir, sdFile) as any));
+    }
 
     // 4. Complex-type datatype schemas — see DATATYPES above.
     for (const name of DATATYPES) {

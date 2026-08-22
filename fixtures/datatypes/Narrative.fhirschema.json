@@ -1,0 +1,44 @@
+{
+  "name": "Narrative",
+  "type": "Narrative",
+  "kind": "complex-type",
+  "class": "complex-type",
+  "url": "http://hl7.org/fhir/StructureDefinition/Narrative",
+  "version": "4.0.1",
+  "description": "Base StructureDefinition for Narrative Type: A human-readable summary of the resource conveying the essential clinical and business information for the resource.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Element",
+  "elements": {
+    "status": {
+      "short": "generated | extensions | additional | empty",
+      "type": "code",
+      "binding": {
+        "strength": "required",
+        "valueSet": "http://hl7.org/fhir/ValueSet/narrative-status|4.0.1",
+        "bindingName": "NarrativeStatus"
+      },
+      "index": 0
+    },
+    "div": {
+      "short": "Limited xhtml content",
+      "type": "xhtml",
+      "constraint": {
+        "txt-1": {
+          "expression": "htmlChecks()",
+          "human": "The narrative SHALL contain only the basic html formatting elements and attributes described in chapters 7-11 (except section 4 of chapter 9) and 15 of the HTML 4.0 standard, <a> elements (either name or href), images and internally contained style attributes",
+          "severity": "error"
+        },
+        "txt-2": {
+          "expression": "htmlChecks()",
+          "human": "The narrative SHALL have some non-whitespace content",
+          "severity": "error"
+        }
+      },
+      "index": 1
+    }
+  },
+  "required": [
+    "div",
+    "status"
+  ]
+}
