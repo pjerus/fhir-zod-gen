@@ -65,7 +65,10 @@ Six defects came out of that (spec section 1). Consequences for how you work her
 - **`fixtures/` is ground truth** — real `@atomic-ehr/fhirschema` `translate()`
   output, reproducible via `scripts/build-fixtures.ts`. Never hand-edit a
   fixture. If you need a field the fixtures don't exercise, add a fixture rather
-  than trusting the docs.
+  than trusting the docs. The one exception is **`fixtures/raw/`, which holds
+  converter *input*** — raw StructureDefinitions, copied verbatim, because
+  slice-match recovery (#32) exists to read what the conversion didn't carry
+  across and so cannot be tested against converted output.
 - **Where the FHIR Schema docs and the converter disagree, the converter wins.**
   Known case: docs say `constraints`, the converter emits `constraint` as an
   id-keyed object.
@@ -114,12 +117,15 @@ Read the comment before "fixing" any of these:
   type stays the unsliced base type and a `.superRefine()` counts deep-matches
   per named slice. `z.discriminatedUnion` is wrong here: `rules` is `open`
   everywhere in the data, so members matching no slice are legal and a closed
-  union would reject them. `slices[name].match` is the trustworthy pattern
-  source but is *usually empty* (`{}` for 558 of 711 slices) — trustworthy and
-  present are different properties, and conflating them is what hid #32. The
-  converter's corruption of a slice's inner `schema.pattern` to
-  `"[Circular Reference]"` is **selective, not universal**: reading `schema` is
-  fine behind `carriesSentinel()`, which exists for exactly that.
+  union would reject them. `slices[name].match` is the only pattern source
+  `emit/` trusts, and the converter leaves it `{}` for 558 of 711 slices —
+  trustworthy and present are different properties, and conflating them is what
+  hid #32. `resolve/slice-match-recovery.ts` now fills it in from the raw
+  StructureDefinition before `merge/` ever sees the document, so **`emit/` is
+  unchanged and still reads only `match`**. The converter's corruption of a
+  slice's inner `schema.pattern` to `"[Circular Reference]"` is **selective,
+  not universal**; `carriesSentinel()` remains the guard that makes any read of
+  `schema` safe.
 - **A primitive can legitimately carry `elements`, and it is never that
   field's own structure.** It's the contents of the `_<field>` sibling FHIR
   puts a primitive's `id`/`extension` in — so the value key stays a bare
@@ -178,22 +184,29 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-#3, #5, #6, #9, #10, #14, #23, #24 and #27 are all closed and merged. Two
-issues are open: #26 (the converter-dependency risk record — decision to keep
-`@atomic-ehr/fhirschema` and not file upstream stands) and #32, the real work.
-What's actually left:
+#3, #5, #6, #9, #10, #14, #23, #24, #27 and #32 are closed and merged. Open:
+#26 (the converter-dependency risk record — decision to keep
+`@atomic-ehr/fhirschema` and not file upstream stands) and **#34, a live false
+rejection**. What's actually left:
 
-- **Slice cardinality is enforced but mostly can't fire (#32).** `emit/slicing.ts`
-  works; the converter starves it. `slicing.slices[name].match` is `{}` for 558
-  of 711 slices, so **240 constraints with a real `min`/`max` are dropped with a
-  warning** across seven packages — 149 because the converter wrote
-  `"[Circular Reference]"` over the pattern. **196 of the 240 are recoverable
-  from the raw StructureDefinitions**, which `resolve/` already holds; the plan
-  is the #31 move (lift from raw, pass a side map, keep `emit/` pure). The
-  remaining 44 have binding/profile discriminators and must stay warnings —
-  synthesising a pattern there is the "partial enum" mistake in a different
-  costume. Measurement and plan: #26's 2026-08-22 comment and #32. **Don't
-  re-derive these numbers; they cost a session.**
+- **#34 — a profile's narrowing contaminates a shared datatype.** The CLI's
+  whole-package output for `hl7.fhir.us.core#6.1.0` emits `Quantity` with
+  `value`/`unit`/`system`/`code` **required**; base R4 Quantity has all seven
+  elements at `min: 0`. Every US Core schema importing it then rejects a legal
+  bare `Quantity`. **The examples ratchet cannot see this** — it emits only the
+  profiles some example matched, and its shared `Quantity.ts` is the clean one,
+  so 441/441 is true for its batch and does not certify what the CLI writes.
+  Treat the ratchet as necessary but *not sufficient* until this is fixed.
+- **Slice-match recovery is done (#32), and the tail is deliberate.** Across
+  seven packages' generated output, unenforced slice cardinalities went
+  **60 → 29** and emitted slice checks **359 → 390**. The remaining 29 are
+  supposed to stay: binding- or profile-discriminated slices, plus slices whose
+  pattern set is only partly usable (see `resolve/slice-match-recovery.ts` on
+  why a partial pattern is skipped whole). A wider population count —
+  240 droppable / 196 recoverable, in #26's 2026-08-22 comment — covers *every*
+  StructureDefinition in those packages including extension definitions the CLI
+  never emits as files, so it is not the user-visible figure. **Don't re-derive
+  either set; they cost a session.**
 - **Slicing beyond cardinality** — deliberately not enforced, each a documented
   decision rather than an oversight: `rules: "closed"`, `ordered`/`openAtEnd`,
   a slice member's own narrower schema, and discriminator types that never
