@@ -134,6 +134,48 @@ export class PackageSchemaSource implements SchemaSource {
     return docs;
   }
 
+  /**
+   * FHIR primitive type -> its regex, read from the raw
+   * `kind: "primitive-type"` StructureDefinitions.
+   *
+   * Read here rather than through `getByType` because `translate()` drops
+   * it: a converted `id` document has `elements: {}` and no trace of
+   * `[A-Za-z0-9\-\.]{1,64}`. This is one of the few places the raw
+   * StructureDefinition is genuinely the only source, which is why it lives
+   * in resolve/ (the layer that already owns package I/O) rather than
+   * leaking a file read into merge/ or emit/.
+   *
+   * The regex hangs off the `value` element's type as an extension:
+   * `element[path$=".value"].type[].extension[url$="/regex"].valueString`.
+   * A primitive with no regex (`xhtml`) is simply absent from the result.
+   */
+  primitiveRegexes(): Record<string, string> {
+    const patterns: Record<string, string> = {};
+
+    for (const pkg of this.packages) {
+      for (const entry of pkg.entries) {
+        if (entry.resourceType !== "StructureDefinition" || entry.kind !== "primitive-type") continue;
+        if (!entry.type || patterns[entry.type]) continue;
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(readFileSync(join(pkg.dir, entry.filename), "utf-8"));
+        } catch {
+          // Same posture as `load` below: one unreadable definition costs
+          // its own constraint, never the run. Silent rather than warned —
+          // an absent regex degrades to today's plain z.string(), which is
+          // a missing narrowing, not a wrong one.
+          continue;
+        }
+
+        const regex = extractPrimitiveRegex(parsed);
+        if (regex) patterns[entry.type] = regex;
+      }
+    }
+
+    return patterns;
+  }
+
   private load(path: string): FhirSchemaDocument | undefined {
     if (this.documents.has(path)) return this.documents.get(path);
 
@@ -152,4 +194,40 @@ export class PackageSchemaSource implements SchemaSource {
     this.documents.set(path, document);
     return document;
   }
+}
+
+/**
+ * Digs the regex out of one raw primitive-type StructureDefinition.
+ *
+ * Reads `snapshot` first and falls back to `differential`, because a
+ * primitive's regex is inherited boilerplate that not every package restates
+ * in its differential. Typed structurally rather than against a
+ * StructureDefinition interface: this is the only place in the codebase that
+ * touches raw FHIR JSON at this depth, and a full type for it would be more
+ * surface than the four field accesses justify.
+ */
+function extractPrimitiveRegex(parsed: unknown): string | undefined {
+  const sd = parsed as {
+    snapshot?: { element?: unknown[] };
+    differential?: { element?: unknown[] };
+  };
+
+  for (const elements of [sd.snapshot?.element, sd.differential?.element]) {
+    for (const raw of elements ?? []) {
+      const element = raw as { path?: string; type?: { extension?: { url?: string; valueString?: string }[] }[] };
+      if (!element.path?.endsWith(".value")) continue;
+
+      for (const type of element.type ?? []) {
+        for (const extension of type.extension ?? []) {
+          // Both the R4 (".../structuredefinition-regex") and R5
+          // (".../regex") urls end the same way.
+          if (extension.url?.endsWith("regex") && extension.valueString) {
+            return extension.valueString;
+          }
+        }
+      }
+    }
+  }
+
+  return undefined;
 }

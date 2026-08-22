@@ -76,6 +76,7 @@ import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
 import { FHIR_PRIMITIVE_TYPES } from "../fhir-schema-types.js";
 import { expandValueSet, type TerminologySource } from "../terminology/index.js";
 import { SLICE_MATCHER_SOURCE, sliceChecksFor, sliceSuperRefine } from "./slicing.js";
+import { primitiveRegexSuffix } from "./primitive-regex.js";
 
 const PRIMITIVE_TYPES = new Set<string>(FHIR_PRIMITIVE_TYPES);
 
@@ -147,6 +148,8 @@ interface EmitContext {
   isCyclicEdge: (from: string, to: string) => boolean;
   /** Raw FHIR type name -> the collision-free identifier that type's own file/const/type actually uses (issue #14). */
   resolveTypeIdentifier: (rawTypeName: string) => string;
+  /** FHIR primitive type -> regex pattern, or undefined when the caller supplied none. */
+  primitiveRegex?: Record<string, string>;
   /** Set when any element in this file emitted a slice check, so emitOneFile declares the matcher exactly once. */
   usesSliceMatcher: { value: boolean };
 }
@@ -198,7 +201,7 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
       ctx.warnings.push(
         `Element "${name}" has a required binding to "${el.binding.valueSet}" that could not be expanded (${expansion.reason}) — falling back to ${primitiveToZod(el.type)}.`
       );
-      expr = primitiveToZod(el.type);
+      expr = primitiveToZod(el.type) + primitiveRegexSuffix(el.type, ctx.primitiveRegex);
       bindingTodo = `/* TODO(defect 2): required binding "${el.binding.valueSet}" could not be expanded — ${escapeForBlockComment(expansion.reason)} */`;
     }
   } else if (PRIMITIVE_TYPES.has(el.type)) {
@@ -214,7 +217,7 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     // value, so the value's own schema is the bare primitive and the
     // extension metadata has nowhere to go here — modelling the `_`-sibling
     // is a separate, larger feature.
-    expr = primitiveToZod(el.type);
+    expr = primitiveToZod(el.type) + primitiveRegexSuffix(el.type, ctx.primitiveRegex);
   } else if (el.elements && Object.keys(el.elements).length > 0) {
     // Inline structure — a BackboneElement (profile-local, never a reusable
     // named type; isNamedType is unset). Genuine named types were already
@@ -633,6 +636,15 @@ export interface EmitOptions {
    * in Phase 4.
    */
   terminology?: TerminologySource;
+  /**
+   * Optional FHIR primitive type -> regex map, lifted from the raw
+   * primitive-type StructureDefinitions by `resolve/` (FHIR Schema drops
+   * them — see primitive-regex.ts). Omitting it is fully supported and
+   * produces byte-identical output to before the feature existed. Only the
+   * structurally meaningful types in PRIMITIVE_REGEX_TYPES are ever applied,
+   * regardless of what this map contains.
+   */
+  primitiveRegex?: Record<string, string>;
 }
 
 /**
@@ -825,6 +837,7 @@ function emitOneFile(
     isCyclicEdge,
     resolveTypeIdentifier,
     usesSliceMatcher,
+    primitiveRegex: options.primitiveRegex,
   };
   const constName = `${identifier}Schema`;
 
