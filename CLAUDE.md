@@ -151,8 +151,16 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-Zero open GitHub issues as of this writing — #3, #5, #6, #9, #10, and #14 are
-all closed and merged. What's actually left:
+#3, #5, #6, #9, #10, #14, #23 and #24 are all closed and merged. Open: #26
+(evaluate the converter dependency — a recorded risk, no action wanted) and
+#27. What's actually left:
+
+- **Primitive extensions (`_<field>` sibling keys)** — issue #27, the one
+  remaining false rejection in the example-validation ratchet. FHIR carries
+  a primitive's extensions in a sibling `_field` object; we don't model it,
+  so a *required* primitive supplied only that way is rejected. Fixing the
+  rejection is small; actually modelling `_field` (including positional
+  arrays for repeating primitives) is a design pass of its own.
 
 - **Choice-type mutual exclusivity** — in progress (another agent, concurrent
   with this one). `value[x]`-style choice groups currently flatten to N
@@ -174,6 +182,13 @@ mCODE, and a non-HL7 national IG) found zero crashes, zero compile failures,
 and zero new unresolved-document reasons. See the README's "Verified against"
 section for specifics.
 
+Separately, `src/validation/examples.test.ts` runs the generated schemas
+against the conformance-tested examples four packages ship, and gates on the
+result — 440/441 validate. It ratchets both ways: a new failure fails the
+build, and so does a listed known-failure that starts passing. It is the
+sharpest tool in this repo for catching a false rejection, and it has now
+found three real bugs (#23, #24, #27) that the unit suite did not.
+
 ## Two things that are now load-bearing and non-obvious
 
 - **Generated file names are derived, not literal.** They come from
@@ -181,6 +196,15 @@ section for specifics.
   document's raw `name`/`url` is not necessarily its output filename
   verbatim. Don't assume `doc.name + ".ts"` when writing tooling that reads
   generated output back.
+- **`specialization` inherits just like `constraint` does.** `translate()`
+  emits one differential layer per document, so base R4 Patient's own
+  elements do *not* include `id`/`meta`/`text`/`contained`/`extension`/
+  `modifierExtension` (DomainResource and Resource), and no complex type's
+  include `id`/`extension` (Element). Both derivations walk their base chain;
+  only a *profile* throws when its base is missing. If you're ever tempted to
+  hardcode a FHIR base field because "it can't be derived from the data" —
+  check one rung further up the chain first. That's issue #23.
+
 - **Cross-file imports mean generated files must be compiled as a set, never
   individually.** A complex-typed field imports that type's own generated
   schema from another file in the same output directory; per-file
