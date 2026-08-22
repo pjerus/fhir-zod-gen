@@ -14,9 +14,9 @@ types, in one artifact — from FHIR Implementation Guides.
 > compilation proves nothing) and on accepting/rejecting real conformant
 > examples.
 >
-> Remaining gaps: FHIRPath invariants are emitted as `/* TODO */` comments, not
-> evaluated; primitive regex constraints (`id`, `code`, etc.) aren't enforced
-> yet. This is a starting point to build on, not a finished validator.
+> Remaining gaps: FHIRPath invariants are emitted as `/* TODO */` comments,
+> not evaluated. This is a starting point to build on, not a finished
+> validator.
 
 FHIR® is HL7's trademark for the healthcare interoperability standard; this
 project is community tooling and is not affiliated with or endorsed by HL7.

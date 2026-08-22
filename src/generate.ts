@@ -29,6 +29,13 @@ export interface GenerateOptions {
    * failure. resolve/'s PackageTerminologySource is the real implementation.
    */
   terminology?: TerminologySource;
+  /**
+   * FHIR primitive type -> regex, from resolve/'s
+   * PackageSchemaSource.primitiveRegexes(). Absent for a file/directory
+   * input, which has no package to read primitive definitions from — output
+   * is then byte-identical to before the feature existed.
+   */
+  primitiveRegex?: Record<string, string>;
 }
 
 /** A document that could not be resolved, and why. Never silently dropped. */
@@ -82,7 +89,7 @@ export async function generatePackage(
     }
   }
 
-  const results = [...shimResults, ...emitPackage(resolved, { terminology: opts.terminology })];
+  const results = [...shimResults, ...emitPackage(resolved, { terminology: opts.terminology, primitiveRegex: opts.primitiveRegex })];
 
   // Guard against a duplicate file name reaching disk (issue #14). By the
   // time we get here, emitPackage's own results are already guaranteed
