@@ -532,6 +532,69 @@ describe("emitPackage", () => {
     expect(extensionFile.source).not.toContain('from "./Extension.js"');
   });
 
+  describe("issue #34: a profile's narrowing must not contaminate the shared datatype", () => {
+    /**
+     * One package, two views of `Quantity`: a vital-signs-style profile
+     * requires `value` and `code` on its own `valueQuantity`, while an
+     * ordinary document's `Quantity` requires nothing. Only one
+     * `Quantity.ts` is emitted for both, so the question is which shape it
+     * carries — and the answer must not depend on batch order.
+     */
+    const narrowed: Record<string, ResolvedElement> = {
+      value: el({ type: "decimal", required: true }),
+      unit: el({ type: "string", required: false }),
+      code: el({ type: "code", required: true }),
+    };
+    const plain: Record<string, ResolvedElement> = {
+      value: el({ type: "decimal", required: false }),
+      unit: el({ type: "string", required: false }),
+      code: el({ type: "code", required: false }),
+    };
+    const profile = schema(
+      { valueQuantity: el({ type: "Quantity", isNamedType: true, elements: narrowed }) },
+      { name: "BodyHeight", url: "http://hl7.org/fhir/StructureDefinition/bodyheight" }
+    );
+    const ordinary = schema(
+      { valueQuantity: el({ type: "Quantity", isNamedType: true, elements: plain }) },
+      { name: "Observation", url: "http://hl7.org/fhir/StructureDefinition/Observation" }
+    );
+
+    it.each([
+      ["narrowed first", [profile, ordinary]],
+      ["plain first", [ordinary, profile]],
+    ])("emits the unnarrowed shape regardless of batch order (%s)", (_label, batch) => {
+      const quantity = emitPackage(batch as ResolvedSchema[]).find((r) => r.fileName === "Quantity.ts")!;
+
+      // The profile's requirement belongs to its own element, not to the
+      // type every other document in the package shares. Emitting it here
+      // rejects a legal bare Quantity everywhere else.
+      expect(quantity.source).toContain('"value": z.number().optional(),');
+      expect(quantity.source).toContain('"code": z.string().optional(),');
+    });
+
+    it("says so, rather than dropping the narrowing silently", () => {
+      const quantity = emitPackage([profile, ordinary]).find((r) => r.fileName === "Quantity.ts")!;
+
+      expect(quantity.warnings.join("\n")).toMatch(/Quantity/);
+      expect(quantity.warnings.join("\n")).toMatch(/value, code|code, value/);
+    });
+
+    it("leaves a type every document agrees on exactly as it was", () => {
+      const other = schema(
+        { valueQuantity: el({ type: "Quantity", isNamedType: true, elements: narrowed }) },
+        { name: "BodyWeight", url: "http://hl7.org/fhir/StructureDefinition/bodyweight" }
+      );
+
+      const quantity = emitPackage([profile, other]).find((r) => r.fileName === "Quantity.ts")!;
+
+      // No disagreement, so nothing to relax — the shared requirement is
+      // real for every use site in this package.
+      expect(quantity.source).toContain('"value": z.number(),');
+      expect(quantity.source).toContain('"code": z.string(),');
+      expect(quantity.warnings).toEqual([]);
+    });
+  });
+
   describe("issue #14: duplicate document names", () => {
     it("two documents with the same name but different urls produce two files and two exported consts, not one overwriting the other", () => {
       const first = schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-1" });
