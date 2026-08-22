@@ -51,6 +51,13 @@ export function loadFixtureSchemaSource(fixturesDir: string): FixtureSchemaSourc
     "uscore-vital-signs.fhirschema.json",
     "vitalsigns.fhirschema.json",
     "observation.fhirschema.json",
+    // The specialization half of every resource's base chain (issue #23):
+    // Patient -> DomainResource -> Resource. Without these, `extension`,
+    // `id`, `meta`, `text` and `contained` are simply absent from every
+    // resolved resource, and `extension`'s `array: true` — stated only on
+    // DomainResource — is unreachable.
+    "r4-domainresource.fhirschema.json",
+    "r4-resource.fhirschema.json",
   ];
   for (const fileName of topLevel) {
     documents.push(readDocument(join(fixturesDir, fileName)));

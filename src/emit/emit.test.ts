@@ -431,6 +431,30 @@ describe("emitPackage", () => {
     expect(patientFile.source).not.toContain("z.lazy(");
   });
 
+  it("a self-referential datatype refers to its own local const instead of importing itself (issue #23)", () => {
+    // Real shape, and only reachable once specializations inherit from their
+    // base: Extension specializes Element, and Element.extension is itself
+    // an Extension. The self-edge was already emitted as z.lazy() correctly
+    // (it is a genuine cycle), but the file also emitted
+    // `import { ExtensionSchema } from "./Extension.js"` alongside its own
+    // `export const ExtensionSchema`, which tsc rejects outright:
+    // "Import declaration conflicts with local declaration".
+    const extensionElements: Record<string, ResolvedElement> = {
+      url: el({ type: "uri", required: true }),
+      extension: el({ type: "Extension", isNamedType: true, isCyclic: true, array: true, required: false }),
+    };
+    const patient = schema(
+      { extension: el({ type: "Extension", isNamedType: true, array: true, required: false, elements: extensionElements }) },
+      { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" }
+    );
+
+    const extensionFile = emitPackage([patient]).find((r) => r.fileName === "Extension.ts")!;
+
+    expect(extensionFile.source).toContain("export const ExtensionSchema");
+    expect(extensionFile.source).toContain('"extension": z.array(z.lazy((): z.ZodTypeAny => ExtensionSchema))');
+    expect(extensionFile.source).not.toContain('from "./Extension.js"');
+  });
+
   describe("issue #14: duplicate document names", () => {
     it("two documents with the same name but different urls produce two files and two exported consts, not one overwriting the other", () => {
       const first = schema({}, { name: "Example Lipid Profile", url: "http://example.org/StructureDefinition/lipid-1" });

@@ -162,7 +162,16 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     // same-batch collision forced it to carry a disambiguating suffix
     // (issue #14).
     const typeIdent = ctx.resolveTypeIdentifier(el.type);
-    ctx.imports.add(el.type);
+    if (el.type !== ctx.currentType) {
+      // A self-reference is already in scope as this file's own exported
+      // const — importing it too is a hard tsc error ("Import declaration
+      // conflicts with local declaration"), not a cosmetic redundancy.
+      // Keyed on the same `currentType` isCyclicEdge is, so the import
+      // decision and the lazy-vs-plain decision can't disagree about what
+      // counts as "this file". Reachable since issue #23: Extension
+      // specializes Element, whose `extension` field is an Extension.
+      ctx.imports.add(el.type);
+    }
     expr = ctx.isCyclicEdge(ctx.currentType, el.type)
       ? `z.lazy((): z.ZodTypeAny => ${typeIdent}Schema)`
       : `${typeIdent}Schema`;

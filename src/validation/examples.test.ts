@@ -33,67 +33,32 @@ import { hasExamples, validatePackageExamples } from "./validate-examples.js";
 const CACHE_DIR = join(homedir(), ".fhir", "packages");
 
 /**
- * Known, filed, genuine false rejections — two distinct root causes, not
- * "known gaps" like choice-type flattening or slicing (which degrade to
- * z.unknown()/reject nothing extra, and aren't in this list at all):
+ * Known, filed, genuine false rejections — not "known gaps" like
+ * choice-type flattening or slicing (which degrade to z.unknown()/reject
+ * nothing extra, and aren't in this list at all):
  *
- *   - issue #23: an `extension`-slice-bearing element resolves with
- *     `array: false` instead of `true` (merge/resolve.ts). Real resources
- *     that actually carry extensions (the overwhelming common case for any
- *     mustSupport-heavy US-Core-style profile) get rejected outright.
  *   - issue #27: a primitive's extensions live in a sibling `_<field>` key
  *     that isn't modelled at all, so a *required* primitive supplied only
- *     via that sibling is rejected for being absent. Surfaced only once #24
- *     was fixed — the wrong object shape was rejecting these resources
- *     earlier, for a different reason, and masking it.
+ *     via that sibling is rejected for being absent. US Core profiles
+ *     QuestionnaireResponse.questionnaire as required and says to carry a
+ *     non-FHIR form's URI in an extension on `_questionnaire`; this example
+ *     does exactly that and has no `questionnaire` key.
  *
- * Issue #24 (a primitive-typed element carrying an extension slice's own
- * `elements.extension` submap emitted as `z.object({extension: ...})`
- * instead of its real primitive type) is fixed; its entries are gone from
- * this list.
+ * Both of the root causes this list was created for are now fixed, and
+ * every entry they accounted for is gone from it:
+ *   - issue #24 (a primitive-typed element carrying an extension slice's
+ *     own `elements.extension` submap emitted as `z.object({extension})`
+ *     rather than its real primitive type) — 4 examples.
+ *   - issue #23 (`extension` resolving `array: false`, because
+ *     specializations never merged over their base and `array: true` is
+ *     stated only on DomainResource) — 32 examples across all four
+ *     packages.
  */
 const KNOWN_FAILURES: Record<string, string[]> = {
-  "hl7.fhir.us.core#6.1.0": [
-    "Condition-condition-SDOH-example.json",
-    "Condition-condition-duodenal-ulcer.json",
-    "Condition-encounter-diagnosis-example1.json",
-    "Condition-encounter-diagnosis-example2.json",
-    "Condition-health-concern-example.json",
-    "Patient-child-example.json",
-    "Patient-deceased-example.json",
-    "Patient-example-targeted-provenance.json",
-    "Patient-example.json",
-    "Patient-infant-example.json",
-    "QuestionnaireResponse-glascow-coma-score.json",
-  ],
-  "hl7.fhir.uv.sdc#3.0.0": [
-    "Questionnaire-SDOHCC-QuestionnaireHungerVitalSign.json",
-    "Questionnaire-demographics.json",
-    "Questionnaire-questionnaire-sdc-profile-example-PHQ9.json",
-    "Questionnaire-questionnaire-sdc-profile-example-image-options.json",
-    "Questionnaire-questionnaire-sdc-test-fhirpath-prepop-source-query.json",
-  ],
-  "hl7.fhir.uv.genomics-reporting#2.0.0": [
-    "Observation-PolyGenicDiagnosticImpExample.json",
-    "Observation-TxImp01.json",
-    "Observation-TxImp02.json",
-    "Observation-TxImp03.json",
-    "Observation-TxImp04.json",
-    "Observation-TxImp05.json",
-    "Observation-TxImp06.json",
-    "Observation-obs-idh-ex.json",
-  ],
-  "hl7.fhir.us.mcode#3.0.0": [
-    "Condition-primary-cancer-condition-breast.json",
-    "Condition-primary-cancer-condition-jenny-m.json",
-    "Condition-primary-cancer-condition-nsclc.json",
-    "Condition-secondary-cancer-condition-brain-mets.json",
-    "Patient-cancer-patient-adam-everyman.json",
-    "Patient-cancer-patient-eve-anyperson.json",
-    "Patient-cancer-patient-jenny-m.json",
-    "Patient-cancer-patient-john-anyperson.json",
-    "Patient-gx-cancer-patient-adam-anyperson.json",
-  ],
+  "hl7.fhir.us.core#6.1.0": ["QuestionnaireResponse-glascow-coma-score.json"],
+  "hl7.fhir.uv.sdc#3.0.0": [],
+  "hl7.fhir.uv.genomics-reporting#2.0.0": [],
+  "hl7.fhir.us.mcode#3.0.0": [],
 };
 
 const PACKAGES = Object.keys(KNOWN_FAILURES);
