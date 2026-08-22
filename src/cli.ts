@@ -141,6 +141,8 @@ interface LoadedInput {
   source?: SchemaSource;
   /** Present only for package input — file/directory input has no package to read terminology from. */
   terminology?: TerminologySource;
+  /** Present only for package input — the regexes live on raw primitive-type StructureDefinitions, which only a package has. */
+  primitiveRegex?: Record<string, string>;
 }
 
 function formatBytes(bytes: number): string {
@@ -294,15 +296,24 @@ async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> 
   // dependency closure, so merge/ can walk each profile up to the base
   // resource in hl7.fhir.r4.core (design doc section 1, defect 4).
   // `resolved.terminology` does the same for required bindings (issue #10).
-  return { docs: resolved.documents, source: resolved.source, terminology: resolved.terminology };
+  // Lifted from the closure's raw primitive-type StructureDefinitions, which
+  // is the only place they survive — FHIR Schema drops them (see
+  // emit/primitive-regex.ts). Version-correct by construction: an R5 run
+  // picks up R5's patterns with no code change.
+  return {
+    docs: resolved.documents,
+    source: resolved.source,
+    terminology: resolved.terminology,
+    primitiveRegex: resolved.source.primitiveRegexes(),
+  };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const { docs, source, terminology } = isPackageInput(args.input)
+  const { docs, source, terminology, primitiveRegex } = isPackageInput(args.input)
     ? await loadFromPackage(args.input, args)
-    : { docs: await loadDocsFromPath(args.input), source: undefined, terminology: undefined };
+    : { docs: await loadDocsFromPath(args.input), source: undefined, terminology: undefined, primitiveRegex: undefined };
 
   console.log(`Loaded ${docs.length} FHIR Schema document(s).`);
 
@@ -311,6 +322,7 @@ async function main() {
     verbose: args.verbose,
     source,
     terminology,
+    primitiveRegex,
   });
 
   console.log(`Wrote ${filesWritten.length} file(s) to ${args.outDir}`);

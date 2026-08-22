@@ -177,7 +177,10 @@ export async function validatePackageExamples(
   for (const m of matched) targetsByUrl.set(m.target.url, m.target);
   const targets = [...targetsByUrl.values()];
 
-  const emitted = emitPackage(targets, { terminology });
+  // primitiveRegex included deliberately: these examples are the only real
+  // evidence that a regex constraint doesn't reject conformant data, so the
+  // ratchet has to generate the same schemas the CLI does.
+  const emitted = emitPackage(targets, { terminology, primitiveRegex: source.primitiveRegexes() });
   // emitPackage's results are `targets` in order, then shared datatypes
   // appended after (see emit.ts) — positional correspondence with `targets`
   // for its first targets.length entries.

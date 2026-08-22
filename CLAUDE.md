@@ -101,6 +101,15 @@ Read the comment before "fixing" any of these:
   evaluated. Evaluating needs fhirpath.js at runtime.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
+- **Primitive regexes are read from the package, never hardcoded, and only
+  for types that carry real signal.** FHIR Schema drops them, so `resolve/`
+  lifts them off the raw primitive-type StructureDefinitions and passes a
+  `type -> pattern` map through `EmitOptions`. `uri`/`url`/`canonical`
+  (`\S*`) and `string`/`markdown` (`[ \r\n\t\S]+`) are deliberately
+  excluded — near-vacuous, and narrowing `uri` would contradict the rule
+  above. Patterns are emitted as `/^(?:…)$/`: Zod's `.regex()` is a substring
+  test, and `^`/`$` bind looser than `|`, so both the anchors and the group
+  are load-bearing.
 - **Slicing counts members, it does not partition the array.** The element
   type stays the unsliced base type and a `.superRefine()` counts deep-matches
   per named slice. `z.discriminatedUnion` is wrong here: `rules` is `open`
@@ -177,8 +186,6 @@ explicitly no action wanted). What's actually left:
   (`exists`/`type`/`profile`/`position`).
 - **FHIRPath invariants** — emitted as `/* TODO(invariant …) */` comments,
   never evaluated (would need `fhirpath.js` at runtime).
-- **Primitive regex constraints** — `id`, `code`, etc. accept any string;
-  their real regex patterns aren't enforced.
 
 A generalization sweep (six structurally diverse IGs beyond the original
 r4.core/us.core pair — R5 core, SDC, SMART App Launch, genomics-reporting,
