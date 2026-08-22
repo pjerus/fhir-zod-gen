@@ -161,6 +161,26 @@ describe("emitDocument", () => {
     expect(warnings).toHaveLength(1);
   });
 
+  it("keeps a primitive-typed element primitive even when it carries an extension slice's own elements (issue #24)", () => {
+    // Real shape, from hl7.fhir.us.core#6.1.0's QuestionnaireResponse
+    // profile: `questionnaire` is a `canonical` that also has the
+    // us-core-extension-questionnaire-uri extension attached, so merge/
+    // legitimately populates `elements: { extension }` on it. FHIR JSON puts
+    // a primitive's extensions in a *sibling* `_questionnaire` key, never
+    // inside the value, so the value's own schema is still just z.string().
+    const { source } = emitDocument(
+      schema({
+        questionnaire: el({
+          type: "canonical",
+          required: false,
+          elements: { extension: el({ type: "Extension", required: false }) },
+        }),
+      })
+    );
+    expect(source).toContain('"questionnaire": z.string().optional()');
+    expect(source).not.toContain('"questionnaire": z.object(');
+  });
+
   describe("choice types (value[x])", () => {
     function deceasedGroup(required: boolean) {
       return {
@@ -409,6 +429,30 @@ describe("emitPackage", () => {
     const patientFile = results.find((r) => r.fileName === "Patient.ts")!;
     expect(patientFile.source).toContain('"identifier": IdentifierSchema.optional()');
     expect(patientFile.source).not.toContain("z.lazy(");
+  });
+
+  it("a self-referential datatype refers to its own local const instead of importing itself (issue #23)", () => {
+    // Real shape, and only reachable once specializations inherit from their
+    // base: Extension specializes Element, and Element.extension is itself
+    // an Extension. The self-edge was already emitted as z.lazy() correctly
+    // (it is a genuine cycle), but the file also emitted
+    // `import { ExtensionSchema } from "./Extension.js"` alongside its own
+    // `export const ExtensionSchema`, which tsc rejects outright:
+    // "Import declaration conflicts with local declaration".
+    const extensionElements: Record<string, ResolvedElement> = {
+      url: el({ type: "uri", required: true }),
+      extension: el({ type: "Extension", isNamedType: true, isCyclic: true, array: true, required: false }),
+    };
+    const patient = schema(
+      { extension: el({ type: "Extension", isNamedType: true, array: true, required: false, elements: extensionElements }) },
+      { name: "Patient", url: "http://hl7.org/fhir/StructureDefinition/Patient" }
+    );
+
+    const extensionFile = emitPackage([patient]).find((r) => r.fileName === "Extension.ts")!;
+
+    expect(extensionFile.source).toContain("export const ExtensionSchema");
+    expect(extensionFile.source).toContain('"extension": z.array(z.lazy((): z.ZodTypeAny => ExtensionSchema))');
+    expect(extensionFile.source).not.toContain('from "./Extension.js"');
   });
 
   describe("issue #14: duplicate document names", () => {

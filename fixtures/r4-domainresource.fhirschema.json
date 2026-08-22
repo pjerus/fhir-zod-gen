@@ -1,0 +1,40 @@
+{
+  "name": "DomainResource",
+  "type": "DomainResource",
+  "kind": "resource",
+  "class": "resource",
+  "url": "http://hl7.org/fhir/StructureDefinition/DomainResource",
+  "version": "4.0.1",
+  "description": "A resource that includes narrative, extensions, and contained resources.",
+  "derivation": "specialization",
+  "base": "http://hl7.org/fhir/StructureDefinition/Resource",
+  "abstract": true,
+  "elements": {
+    "text": {
+      "short": "Text summary of the resource, for human interpretation",
+      "type": "Narrative",
+      "index": 0
+    },
+    "contained": {
+      "short": "Contained, inline Resources",
+      "type": "Resource",
+      "array": true,
+      "index": 1
+    },
+    "extension": {
+      "short": "Additional content defined by implementations",
+      "type": "Extension",
+      "array": true,
+      "index": 2
+    },
+    "modifierExtension": {
+      "short": "Extensions that cannot be ignored",
+      "type": "Extension",
+      "isModifier": true,
+      "isModifierReason": "Modifier extensions are expected to modify the meaning or interpretation of the resource that contains them",
+      "array": true,
+      "index": 3
+    }
+  },
+  "extensions": {}
+}

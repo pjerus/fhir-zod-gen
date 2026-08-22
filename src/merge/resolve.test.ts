@@ -145,12 +145,76 @@ describe("resolveDocument — cycle detection (Reference <-> Identifier)", () =>
   });
 });
 
+describe("resolveDocument — specializations inherit from their base too (issue #23)", () => {
+  it("resolves `extension` as an array — `array: true` is stated only on DomainResource, two levels up a chain of specializations", () => {
+    // The whole of #23. us-core-patient (constraint) -> Patient
+    // (specialization) -> DomainResource (specialization) -> Resource. Only
+    // the first hop is a profile; stopping the walk at the first
+    // non-profile, as this resolver used to, never reaches the one document
+    // that says `extension` repeats.
+    expect(loadFixtureDoc("r4-patient.fhirschema.json").elements?.extension).toBeUndefined();
+    expect(uscorePatient.elements.extension?.array).toBe(true);
+  });
+
+  it("inherits DomainResource's own fields onto a resource whose document restates none of them", () => {
+    const r4Patient = loadFixtureDoc("r4-patient.fhirschema.json");
+    for (const name of ["text", "contained", "modifierExtension"]) {
+      expect(r4Patient.elements?.[name], `r4-patient's own document should not restate ${name}`).toBeUndefined();
+      expect(uscorePatient.elements[name]?.type, `${name} should resolve via DomainResource`).toBeTruthy();
+    }
+    expect(uscorePatient.elements.text?.type).toBe("Narrative");
+    expect(uscorePatient.elements.contained?.array).toBe(true);
+  });
+
+  it("inherits Resource's fields from the far end of the chain (two specialization hops up)", () => {
+    expect(uscorePatient.elements.id?.type).toBe("string");
+    expect(uscorePatient.elements.meta?.type).toBe("Meta");
+    expect(uscorePatient.elements.implicitRules?.type).toBe("uri");
+    expect(uscorePatient.elements.language?.type).toBe("code");
+  });
+
+  it("applies to complex datatypes as well — HumanName specializes Element, so it inherits `id`/`extension`", () => {
+    const name = uscorePatient.elements.name;
+    expect(loadFixtureDoc("datatypes/HumanName.fhirschema.json").elements?.id).toBeUndefined();
+    expect(name?.elements?.id?.type).toBe("string");
+    expect(name?.elements?.extension?.array).toBe(true);
+  });
+
+  it("a specialization whose base is absent from the SchemaSource degrades to its own elements, rather than throwing the way a profile does", () => {
+    // Asymmetric on purpose: a profile states only its narrowings, so a
+    // missing base leaves nothing to resolve against and must throw (see the
+    // out-of-scope-base-chain block below). A specialization's own elements
+    // are already concrete — a missing base costs it only the inherited
+    // ones, which is a smaller gap than refusing to resolve at all.
+    const orphan: FhirSchemaDocument = {
+      name: "Orphan",
+      url: "http://example.org/Orphan",
+      type: "Orphan",
+      kind: "resource",
+      class: "resource",
+      derivation: "specialization",
+      base: "http://example.org/NotInThisSource",
+      elements: { alpha: { type: "string" } },
+    };
+    const resolved = resolveDocument(orphan, new FixtureSchemaSource([orphan]));
+    expect(resolved.elements.alpha?.type).toBe("string");
+    expect(resolved.elements.id).toBeUndefined();
+  });
+});
+
 describe("resolveDocument — types with no SchemaSource entry (Extension)", () => {
-  it("resolves the generic `extension` element's own type/min/max concretely without needing Extension's structure", () => {
+  it("resolves the generic `extension` element's own type concretely without needing Extension's structure", () => {
     const extension = uscorePatient.elements.extension;
     expect(extension?.type).toBe("Extension");
     expect(extension?.min).toBe(0);
-    expect(extension?.max).toBe(1);
+    // Was `max === 1` before issue #23. That assertion had become the wrong
+    // question rather than merely a stale number: the 1 was never this
+    // element's own cardinality. us-core-patient's differential has *no*
+    // container row for `Patient.extension` — only six sliceName rows — and
+    // the converter hoists the first slice's schema (`us-core-race`, 0..1)
+    // onto the container. `extension` is 0..* here, as it is on every
+    // DomainResource.
+    expect(extension?.max).toBeUndefined();
   });
 
   it("leaves `elements` unexpanded for a type not in this SchemaSource, rather than throwing or fabricating structure", () => {
