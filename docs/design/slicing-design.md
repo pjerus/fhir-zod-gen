@@ -3,7 +3,7 @@
 **Author:** research/design subagent (no code written)
 **Scope:** de-risk Phase 3d (slicing) before dispatch. Grounded in the three
 committed fixtures plus a direct scan of the real `hl7.fhir.us.core#6.1.0`
-package cached at `/Users/pat/.fhir/packages/hl7.fhir.us.core#6.1.0`.
+package cached at `~/.fhir/packages/hl7.fhir.us.core#6.1.0`.
 **Standing rule this whole doc obeys:** never reject conformant data. Every
 recommendation below defaults to the permissive option when in doubt, and
 says so explicitly.
@@ -88,7 +88,7 @@ below).
 
 ### More broadly, across real US Core (quantified, not assumed)
 
-`/Users/pat/.fhir/packages/hl7.fhir.us.core#6.1.0` was already cached on disk
+`~/.fhir/packages/hl7.fhir.us.core#6.1.0` was already cached on disk
 (presumably from earlier fixture work). I scanned all 59 `StructureDefinition-*.json`
 files' `differential.element[].slicing` blocks directly (raw FHIR, not FHIR
 Schema — but discriminator `type` is a spec-defined enum that the converter
