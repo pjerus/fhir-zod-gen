@@ -14,8 +14,8 @@ types, in one artifact — from FHIR Implementation Guides.
 > compilation proves nothing) and on accepting/rejecting real conformant
 > examples.
 >
-> Remaining gaps: choice-type mutual exclusivity is in progress; slicing
-> (`z.discriminatedUnion` / extension slicing) is specced at
+> Remaining gaps: slicing (`z.discriminatedUnion` / extension slicing) is
+> specced at
 > [`docs/design/slicing-design.md`](./docs/design/slicing-design.md) but
 > unstarted; FHIRPath invariants are emitted as `/* TODO */` comments, not
 > evaluated; primitive regex constraints (`id`, `code`, etc.) aren't enforced
@@ -135,8 +135,8 @@ output set together under `tsc --strict --noEmit`) against:
 
 Across all of these: zero crashes, zero compile failures, and no filename
 collisions (generated file count always matched files actually written to
-disk). Warnings remain within known, tracked gaps (choice-type flattening,
-slicing, unresolvable-type fallbacks) — exact counts aren't cited here since
+disk). Warnings remain within known, tracked gaps (slicing,
+unresolvable-type fallbacks) — exact counts aren't cited here since
 they shift as those gaps close; check `-v` output against a given commit if
 you need a number.
 
@@ -150,11 +150,9 @@ result and ratchets in both directions: a new failure fails the build, and
 so does a known failure that starts passing without being removed from the
 list.
 
-**440 of 441 matched examples validate.** The one remaining is a documented
-false rejection with an open issue (#27 — a required primitive whose value
-FHIR permits to be carried in its `_field` sibling key, which isn't modelled
-yet). Bundles and resources with no resolvable profile are excluded rather
-than counted as passes.
+**All 441 matched examples validate**, with no documented exceptions
+outstanding. Bundles and resources with no resolvable profile are excluded
+rather than counted as passes.
 
 ## What it generates
 

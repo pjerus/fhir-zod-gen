@@ -33,29 +33,33 @@ import { hasExamples, validatePackageExamples } from "./validate-examples.js";
 const CACHE_DIR = join(homedir(), ".fhir", "packages");
 
 /**
- * Known, filed, genuine false rejections — not "known gaps" like
- * choice-type flattening or slicing (which degrade to z.unknown()/reject
- * nothing extra, and aren't in this list at all):
+ * Genuine false rejections that are filed but not yet fixed. **Currently
+ * empty** — every matched example in all four packages validates.
  *
- *   - issue #27: a primitive's extensions live in a sibling `_<field>` key
- *     that isn't modelled at all, so a *required* primitive supplied only
- *     via that sibling is rejected for being absent. US Core profiles
- *     QuestionnaireResponse.questionnaire as required and says to carry a
- *     non-FHIR form's URI in an extension on `_questionnaire`; this example
- *     does exactly that and has no `questionnaire` key.
+ * Empty is a meaningful state here, not an unused feature: the second
+ * assertion below means any regression that rejects conformant data fails
+ * the build immediately, with the offending file and its Zod issues in the
+ * message. Keep the shape (and the per-package keys) rather than deleting
+ * it — the next false rejection should land here with an issue number, not
+ * quietly widen the gate.
  *
- * Both of the root causes this list was created for are now fixed, and
- * every entry they accounted for is gone from it:
+ * Entries are for false *rejections* only, never "known gaps" like
+ * choice-type flattening or slicing, which degrade to z.unknown() and
+ * reject nothing extra.
+ *
+ * The three root causes this list was created for are all fixed now, and
+ * every entry they accounted for is gone:
+ *   - issue #23 (`extension` resolving `array: false`, because
+ *     specializations never merged over their base and `array: true` is
+ *     stated only on DomainResource) — 32 examples, all four packages.
  *   - issue #24 (a primitive-typed element carrying an extension slice's
  *     own `elements.extension` submap emitted as `z.object({extension})`
  *     rather than its real primitive type) — 4 examples.
- *   - issue #23 (`extension` resolving `array: false`, because
- *     specializations never merged over their base and `array: true` is
- *     stated only on DomainResource) — 32 examples across all four
- *     packages.
+ *   - issue #27 (a required primitive whose value FHIR permits to be
+ *     carried in its `_<field>` sibling) — 1 example.
  */
 const KNOWN_FAILURES: Record<string, string[]> = {
-  "hl7.fhir.us.core#6.1.0": ["QuestionnaireResponse-glascow-coma-score.json"],
+  "hl7.fhir.us.core#6.1.0": [],
   "hl7.fhir.uv.sdc#3.0.0": [],
   "hl7.fhir.uv.genomics-reporting#2.0.0": [],
   "hl7.fhir.us.mcode#3.0.0": [],

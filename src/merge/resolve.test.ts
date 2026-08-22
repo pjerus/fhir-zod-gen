@@ -173,6 +173,25 @@ describe("resolveDocument — specializations inherit from their base too (issue
     expect(uscorePatient.elements.language?.type).toBe("code");
   });
 
+  it("applies to BackboneElements — they inherit modifierExtension from BackboneElement and id/extension from Element", () => {
+    const communication = uscorePatient.elements.communication;
+    expect(communication?.type).toBe("BackboneElement");
+    expect(communication?.elements?.modifierExtension?.array).toBe(true);
+    expect(communication?.elements?.extension?.array).toBe(true);
+    expect(communication?.elements?.id?.type).toBe("string");
+  });
+
+  it("merges those inherited fields UNDER the profile chain's own structure, never over it", () => {
+    // The regression this guards: assigning BackboneElement's three-field
+    // map to childResolvedBase instead of merging it discards everything the
+    // base chain already resolved for this backbone, and every real child
+    // (here `language`, whose CodeableConcept type comes from base
+    // r4-patient) collapses to "unknown".
+    const language = uscorePatient.elements.communication?.elements?.language;
+    expect(language?.type).toBe("CodeableConcept");
+    expect(language?.required).toBe(true);
+  });
+
   it("applies to complex datatypes as well — HumanName specializes Element, so it inherits `id`/`extension`", () => {
     const name = uscorePatient.elements.name;
     expect(loadFixtureDoc("datatypes/HumanName.fhirschema.json").elements?.id).toBeUndefined();
@@ -199,6 +218,46 @@ describe("resolveDocument — specializations inherit from their base too (issue
     const resolved = resolveDocument(orphan, new FixtureSchemaSource([orphan]));
     expect(resolved.elements.alpha?.type).toBe("string");
     expect(resolved.elements.id).toBeUndefined();
+  });
+});
+
+describe("resolveDocument — a hoisted slice copy still yields a type when there's no base (issue #27)", () => {
+  it("keeps the discarded copy's `type` as a last resort, rather than falling through to 'unknown'", () => {
+    // Real shape, from hl7.fhir.us.core#6.1.0's QuestionnaireResponse
+    // profile: `questionnaire` is a primitive (canonical) carrying an
+    // attached extension, and that `extension` child is itself sliced with a
+    // single slice whose schema the converter hoists onto it. Discarding the
+    // hoisted copy (issue #23) is right for cardinality, but this element has
+    // no base to recover `type` from — a primitive's children are never
+    // expanded from a type document — so `type` has to survive or emit/
+    // degrades a perfectly known Extension to z.unknown().
+    const doc: FhirSchemaDocument = {
+      name: "HostProfile",
+      url: "http://example.org/HostProfile",
+      type: "HostProfile",
+      kind: "resource",
+      class: "resource",
+      derivation: "specialization",
+      elements: {
+        questionnaire: {
+          type: "canonical",
+          elements: {
+            extension: {
+              type: "Extension",
+              min: 0,
+              max: 1,
+              slicing: { slices: { uri: { match: {}, schema: { type: "Extension", min: 0, max: 1 } } } },
+            },
+          },
+        },
+      },
+    };
+
+    const el = resolveDocument(doc, new FixtureSchemaSource([doc])).elements.questionnaire?.elements?.extension;
+    expect(el?.type).toBe("Extension");
+    // Still discarded, which is the point of issue #23's fix: the 0..1 is the
+    // slice's cardinality, not the container's.
+    expect(el?.max).toBeUndefined();
   });
 });
 

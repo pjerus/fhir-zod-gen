@@ -381,7 +381,18 @@ function resolveOneElement(
   const ownEl = withoutHoistedSliceSchema(rawEl);
   const effectiveBase = resolvedBase ?? resolveElementReference(ownEl?.elementReference, source, cache);
 
-  const type = ownEl?.type ?? effectiveBase?.type;
+  // The last `?? rawEl?.type` only ever fires for an element whose own
+  // schema `withoutHoistedSliceSchema` discarded as a hoisted slice copy AND
+  // that has no base to inherit a type from. Normally the base supplies it,
+  // which is the whole reason discarding is safe; but a sliced `extension`
+  // hanging off a *primitive* has no base at all — merge/ doesn't expand a
+  // primitive's children from any type document — so without this it fell
+  // through to "unknown" and emit/ degraded it to z.unknown(). Reaching back
+  // into the discarded copy is sound for `type` specifically and for nothing
+  // else here: FHIR slicing partitions instances of one element, so every
+  // slice necessarily shares the container's type, whereas cardinality is
+  // precisely what differs per slice and must stay discarded.
+  const type = ownEl?.type ?? effectiveBase?.type ?? rawEl?.type;
   const array = ownEl?.array ?? effectiveBase?.array ?? false;
   // Tighter, not "profile wins": a profile is only ever supposed to narrow
   // cardinality, never loosen it, but nothing upstream validates that
@@ -458,8 +469,28 @@ function resolveOneElement(
     resolved.isNamedType = true;
     childResolvedBase = undefined;
   } else if (type === "BackboneElement") {
-    // Inline structure only, defined directly on whichever layer (profile
-    // or base) declared it — never looked up via SchemaSource.
+    // A BackboneElement's *named* children are inline structure, defined
+    // directly on whichever layer declared them and never looked up by name
+    // — that part is unchanged. What it does still inherit is
+    // BackboneElement's own `modifierExtension` plus Element's
+    // `id`/`extension` (BackboneElement specializes Element), which no
+    // profile restates and which are therefore absent from the differential
+    // entirely. Same defect as issue #23 for resources, third location: a
+    // BackboneElement whose profile slices `extension` resolved it
+    // `array: false` and rejected SDC Questionnaires whose `item.extension`
+    // is the array FHIR requires. Merged as a base, so the profile's own
+    // inline children still win wherever they overlap.
+    const expansion = resolveTypeElements("BackboneElement", source, cache);
+    if (expansion.status === "resolved") {
+      // Merged UNDER whatever the profile chain already resolved, never over
+      // it. `effectiveBase.elements` holds this backbone's real structure as
+      // resolved through every layer beneath this one (base Patient's
+      // `communication.language: CodeableConcept`, say); BackboneElement's
+      // own map holds only the three universally-inherited fields. Assigning
+      // instead of merging discards the former and resolves every backbone
+      // child to `unknown`.
+      childResolvedBase = { ...expansion.elements, ...(childResolvedBase ?? {}) };
+    }
   } else if (!PRIMITIVE_TYPES.has(type)) {
     const expansion = resolveTypeElements(type, source, cache);
     if (expansion.status === "cyclic") {
@@ -475,9 +506,30 @@ function resolveOneElement(
     // undefined, since a type-not-found element has nothing upstream to
     // have populated it either. isNamedType stays unset: emit/ has nowhere
     // to import this type's schema from, so it falls back to z.unknown().
+  } else if (ownEl?.elements) {
+    // A primitive that a profile has hung children off. Those children are
+    // never the primitive's *value* — FHIR serializes that as a bare JSON
+    // scalar — they're the contents of its `_<field>` sibling, which is an
+    // `Element`. So Element is their base, exactly as DomainResource is a
+    // resource's (issue #23) and for the same reason: `translate()` states
+    // only what this layer narrows, so a profile attaching an extension here
+    // says `{extension: {...}}` and nothing about `id`, or about `extension`
+    // being 0..*. Without this the sibling's `extension` resolved
+    // `array: false` and rejected the extension array every conformant
+    // instance actually carries — the same defect as #23, one level down.
+    //
+    // Guarded on `ownEl.elements` so this only fires where a profile
+    // actually attached something. Unconditionally would give *every*
+    // primitive in every schema an id/extension submap, which emit/ would
+    // then turn into a `_<field>` key for all ~807,000 of them.
+    const expansion = resolveTypeElements("Element", source, cache);
+    if (expansion.status === "resolved") {
+      // Merged under, not over — same reason as the BackboneElement branch.
+      childResolvedBase = { ...expansion.elements, ...(childResolvedBase ?? {}) };
+    }
   }
-  // Primitives: no structure to expand; childResolvedBase stays whatever
-  // resolvedBase already had (normally undefined).
+  // Primitives with no attached children: nothing to expand; childResolvedBase
+  // stays whatever resolvedBase already had (normally undefined).
 
   const rawNestedElements = ownEl?.elements;
   if (rawNestedElements || childResolvedBase) {

@@ -101,6 +101,14 @@ Read the comment before "fixing" any of these:
   evaluated. Evaluating needs fhirpath.js at runtime.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
+- **A primitive can legitimately carry `elements`, and it is never that
+  field's own structure.** It's the contents of the `_<field>` sibling FHIR
+  puts a primitive's `id`/`extension` in — so the value key stays a bare
+  primitive and a `_<field>` key is emitted beside it (#24, #27). Emitted
+  only where a profile attaches something: 14 of ~807,000 primitive fields
+  across three large IGs. A *required* such primitive goes `.optional()`
+  with its requirement moved into the object's `.superRefine()`, which
+  accepts the value or the sibling — FHIR permits either.
 
 ## Emitted-output conventions
 
@@ -151,22 +159,10 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-#3, #5, #6, #9, #10, #14, #23 and #24 are all closed and merged. Open: #26
-(evaluate the converter dependency — a recorded risk, no action wanted) and
-#27. What's actually left:
+#3, #5, #6, #9, #10, #14, #23, #24 and #27 are all closed and merged. The
+only open issue is #26 (evaluate the converter dependency — a recorded risk,
+explicitly no action wanted). What's actually left:
 
-- **Primitive extensions (`_<field>` sibling keys)** — issue #27, the one
-  remaining false rejection in the example-validation ratchet. FHIR carries
-  a primitive's extensions in a sibling `_field` object; we don't model it,
-  so a *required* primitive supplied only that way is rejected. Fixing the
-  rejection is small; actually modelling `_field` (including positional
-  arrays for repeating primitives) is a design pass of its own.
-
-- **Choice-type mutual exclusivity** — in progress (another agent, concurrent
-  with this one). `value[x]`-style choice groups currently flatten to N
-  independent optional keys with no `.superRefine()` enforcing "at most one is
-  set"; see the design doc's Phase 3 section and its `@solarahealth/fhir-r4`
-  prior-art critique (section 7, REJECT/DO BETTER #1).
 - **Slicing** — specced at `docs/design/slicing-design.md` (grounded in the
   real committed fixtures plus a scan of `hl7.fhir.us.core#6.1.0`), not
   started. `z.discriminatedUnion` for value-type discriminators, `z.union` +
@@ -184,10 +180,12 @@ section for specifics.
 
 Separately, `src/validation/examples.test.ts` runs the generated schemas
 against the conformance-tested examples four packages ship, and gates on the
-result — 440/441 validate. It ratchets both ways: a new failure fails the
-build, and so does a listed known-failure that starts passing. It is the
-sharpest tool in this repo for catching a false rejection, and it has now
-found three real bugs (#23, #24, #27) that the unit suite did not.
+result — **441/441 validate, and `KNOWN_FAILURES` is empty**. It ratchets
+both ways: a new failure fails the build, and so does a listed known-failure
+that starts passing. It is the sharpest tool in this repo for catching a
+false rejection — it found #23, #24 and #27, none of which the unit suite
+caught, and it caught two regressions mid-fix that reasoning had missed.
+Keep the empty per-package keys rather than deleting the structure.
 
 ## Two things that are now load-bearing and non-obvious
 
