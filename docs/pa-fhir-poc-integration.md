@@ -85,34 +85,35 @@ Each output directory is self-contained: one file per resource profile, one
 per shared datatype (`CodeableConcept.ts`, `Reference.ts`, …), and a barrel
 `index.ts` re-exporting everything.
 
-### One output directory per package — this one will bite you
-
-The CLI takes a **single** input, so three packages means three runs. Give
-each its own directory:
+### Name every package in one run
 
 ```bash
-fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 -o ./src/generated/dtr
-fhir-zod-gen hl7.fhir.us.davinci-crd#2.0.1 -o ./src/generated/crd
-fhir-zod-gen hl7.fhir.r4.core#4.0.1        -o ./src/generated/r4
+fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 \
+             hl7.fhir.us.davinci-crd#2.0.1 \
+             hl7.fhir.r4.core#4.0.1 \
+             -o ./src/generated
 ```
 
-**Do not point two runs at the same directory.** Verified behaviour: after
-generating DTR (45 files) and then CRD into the same directory, you get 60
-files and every DTR profile is still on disk — but `index.ts` has been
-**overwritten** and exports *none* of them. `grep -c DTR index.ts` returns 0.
-Anything importing from the barrel silently loses half of what it asked for,
-with no error at any stage.
+One batch, one barrel: shared datatypes are reconciled across all three and
+emitted once, so every profile references the same `CodeableConcept.ts`.
+Verified — DTR + CRD together produce 60 files whose `index.ts` exports all 9
+DTR profiles *and* CRD's, and the set compiles under `tsc --strict`.
 
-There is a second, subtler reason. A shared datatype file holds the consensus
-of the batch it was emitted with (see the README on how a profile's narrowing
-is reconciled), so `CodeableConcept.ts` from a DTR batch and from a CRD batch
-are not guaranteed to be the same file — the second run's copy would silently
-replace the first's. For these two packages they happen to be byte-identical,
-which is luck, not a guarantee.
+**Running the tool once per package into the same directory is a different
+thing, and is now refused.** The second run rewrites `index.ts` from its own
+results, so the first run's files stay on disk while dropping out of the
+barrel — anything importing from `index.ts` silently loses them. That used to
+happen quietly (issue #50); it now fails with a message naming the orphaned
+files, and exits non-zero.
 
-The cost of separate directories is duplicated datatype files across them.
-That's real but harmless: they're independent modules, and each package's
-profiles reference their own copies consistently.
+Separate `-o` directories per package still work if you prefer them. The cost
+is a duplicated copy of each shared datatype per directory, which is harmless
+— they're independent modules — but you lose cross-package datatype
+reconciliation, so prefer one run where you can.
+
+Where two inputs disagree about the same canonical, the **leftmost wins**, so
+the outcome is predictable from the command you ran rather than from
+iteration order.
 
 **`PlanDefinition` is not in CRD's output**, because CRD doesn't profile it.
 The POC projects a plain R4 `PlanDefinition`, so that schema comes from

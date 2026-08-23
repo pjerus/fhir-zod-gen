@@ -1,7 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
-import { emitPackage, type EmitResult } from "./emit/index.js";
+import { emitPackage, GENERATED_FILE_MARKER, type EmitResult } from "./emit/index.js";
 import { resolveDocument, type ResolvedSchema, type SchemaSource } from "./merge/index.js";
 import { generateSchemaFile } from "./mapper.js";
 import type { TerminologySource } from "./terminology/index.js";
@@ -36,6 +36,14 @@ export interface GenerateOptions {
    * is then byte-identical to before the feature existed.
    */
   primitiveRegex?: Record<string, string>;
+  /**
+   * Write even when the output directory holds generated files this run
+   * won't rewrite (issue #50). Off by default: those files stay on disk but
+   * drop out of the barrel, so anything importing from `index.ts` silently
+   * loses them. Generating several IGs is now one run with several inputs,
+   * which is the fix; this flag exists for the case where someone means it.
+   */
+  force?: boolean;
 }
 
 /** A document that could not be resolved, and why. Never silently dropped. */
@@ -43,6 +51,45 @@ export interface GenerateFailure {
   name: string;
   url: string;
   message: string;
+}
+
+/**
+ * Refuses to leave a previous batch's files orphaned in the output directory
+ * (issue #50).
+ *
+ * The barrel is rewritten from this run's results alone, so a file another
+ * run wrote and this one doesn't stays on disk while vanishing from
+ * `index.ts`. Measured before this guard existed: generating `davinci-dtr`
+ * (45 files) then `davinci-crd` into the same directory left 60 files on
+ * disk and a barrel exporting none of DTR's — no error at generation, none
+ * at compile, and anything importing from the barrel silently got half of
+ * what it asked for.
+ *
+ * Only files carrying emit/'s own header count. A hand-written .ts sharing
+ * the directory is the user's business and is neither reported nor touched.
+ */
+async function assertNoStaleGeneratedFiles(opts: GenerateOptions, results: EmitResult[]): Promise<void> {
+  if (opts.force) return;
+
+  const writing = new Set(results.map((r) => r.fileName));
+  writing.add("index.ts");
+
+  const stale: string[] = [];
+  for (const entry of await readdir(opts.outDir)) {
+    if (!entry.endsWith(".ts") || writing.has(entry)) continue;
+    const existing = await readFile(join(opts.outDir, entry), "utf-8").catch(() => "");
+    if (existing.startsWith(GENERATED_FILE_MARKER)) stale.push(entry);
+  }
+  if (stale.length === 0) return;
+
+  const shown = stale.slice(0, 5).join(", ");
+  const rest = stale.length > 5 ? `, and ${stale.length - 5} more` : "";
+  throw new Error(
+    `${opts.outDir} already holds ${stale.length} generated file(s) this run would not rewrite (${shown}${rest}). ` +
+      `They would stay on disk but drop out of index.ts, so importing from the barrel would silently miss them. ` +
+      `Generate every package in one run instead — "fhir-zod-gen a#1 b#2 -o ${opts.outDir}" shares one batch and one barrel — ` +
+      `or give each package its own -o directory. Pass --force to write anyway.`
+  );
 }
 
 export async function generatePackage(
@@ -111,6 +158,8 @@ export async function generatePackage(
     }
     seenFileNames.add(result.fileName);
   }
+
+  await assertNoStaleGeneratedFiles(opts, results);
 
   const exportLines: string[] = [];
 

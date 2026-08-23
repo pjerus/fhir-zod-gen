@@ -3,3 +3,4 @@ export type { ValueSetResource, CodeSystemResource, ValueSetComposeInclude, Code
 export { expandValueSet } from "./expand.js";
 export type { ExpansionResult } from "./expand.js";
 export { FixtureTerminologySource, loadFixtureTerminologySource } from "./fixture-terminology-source.js";
+export { compositeTerminologySource } from "./composite-terminology-source.js";

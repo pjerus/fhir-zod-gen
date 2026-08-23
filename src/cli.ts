@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import type { FhirSchemaDocument } from "./fhir-schema-types.js";
 import { generatePackage } from "./generate.js";
-import type { SchemaSource } from "./merge/index.js";
+import { compositeSchemaSource, type SchemaSource } from "./merge/index.js";
 import {
   formatPackageSpec,
   looksLikePackageSpec,
@@ -14,20 +14,24 @@ import {
   type ClosurePreview,
   type PackageSpec,
 } from "./resolve/index.js";
-import type { TerminologySource } from "./terminology/index.js";
+import { compositeTerminologySource, type TerminologySource } from "./terminology/index.js";
 
 interface Args {
-  input: string;
+  /** One or more inputs, in the order given — see main() on why order is load-bearing. */
+  inputs: string[];
   outDir: string;
   verbose: boolean;
   /** Overrides the standard FHIR package cache. Only meaningful for package input. */
   cacheDir?: string;
   /** Omit terminology-only dependencies from the closure — see resolve/closure.ts. */
   skipTerminology: boolean;
+  /** Write even if the output directory holds generated files this run won't rewrite (issue #50). */
+  force: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Partial<Args> = { verbose: false, skipTerminology: false };
+  const args: Partial<Args> = { verbose: false, skipTerminology: false, force: false };
+  const inputs: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-o" || a === "--out") {
@@ -38,26 +42,29 @@ function parseArgs(argv: string[]): Args {
       args.verbose = true;
     } else if (a === "--skip-terminology") {
       args.skipTerminology = true;
+    } else if (a === "--force") {
+      args.force = true;
     } else if (a === "-h" || a === "--help") {
       printHelp();
       process.exit(0);
     } else if (!a.startsWith("-")) {
-      args.input = a;
+      inputs.push(a);
     }
   }
 
-  if (!args.input) {
+  if (inputs.length === 0) {
     console.error("Error: missing <input>.\n");
     printHelp();
     process.exit(1);
   }
 
   return {
-    input: args.input,
+    inputs,
     outDir: args.outDir ?? "./generated",
     verbose: args.verbose ?? false,
     cacheDir: args.cacheDir,
     skipTerminology: args.skipTerminology ?? false,
+    force: args.force ?? false,
   };
 }
 
@@ -66,11 +73,24 @@ function printHelp() {
 fhir-zod-gen — generate Zod schemas from FHIR Implementation Guides
 
 Usage:
-  fhir-zod-gen <input> [-o <outDir>] [-v] [--cache-dir <dir>] [--skip-terminology]
+  fhir-zod-gen <input>... [-o <outDir>] [-v] [--cache-dir <dir>]
+                          [--skip-terminology] [--force]
 
   <input>   An IG package identifier (hl7.fhir.us.core#6.1.0, or a bare id
             for the registry's latest), OR a path to a single FHIR Schema
             .json file, OR a directory of them.
+
+            More than one may be given. They are generated as ONE batch into
+            one directory: shared datatypes are reconciled across every input
+            and emitted once, and a single index.ts exports everything. That
+            is the supported way to generate several IGs together — running
+            the tool twice into the same directory leaves the first run's
+            files orphaned (they stay on disk but drop out of index.ts), and
+            is refused unless you pass --force.
+
+            Package identifiers and file paths can't be mixed in one run: a
+            file input carries no dependency closure to resolve base chains
+            against.
 
 Options:
   -o, --out <dir>       Output directory (default: ./generated)
@@ -84,10 +104,15 @@ Options:
                         to z.enum([...]) instead degrade to z.string() with a
                         TODO(defect 2) marker, same as when a binding's
                         ValueSet can't be found at all.
+      --force           Write even when the output directory holds generated
+                        files this run won't rewrite. They stay on disk but
+                        drop out of index.ts — prefer naming every package in
+                        one run, or one directory per package.
 
 Examples:
   fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./generated
   fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./generated --skip-terminology
+  fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 hl7.fhir.us.davinci-crd#2.0.1 -o ./generated
   fhir-zod-gen ./examples/patient.fhirschema.json -o ./generated
   fhir-zod-gen ./fhir-schemas/us-core -o ./generated -v
 
@@ -308,18 +333,105 @@ async function loadFromPackage(input: string, args: Args): Promise<LoadedInput> 
   };
 }
 
+/**
+ * Loads every input into the single batch that will be emitted (issue #50).
+ *
+ * One run, one batch, one barrel — that is the whole point. Shared datatypes
+ * are reconciled across every package named, so `CodeableConcept.ts` is
+ * emitted once and every profile from every input references that same file.
+ * Generating the same set as separate runs into one directory is what left a
+ * barrel exporting only the last run's profiles.
+ *
+ * Package inputs and file/directory inputs can't be mixed. A file input has
+ * no closure to resolve base chains against, so combining the two would mean
+ * silently resolving some documents against a source they aren't from —
+ * a guess, where this project's rule is to refuse and say so.
+ */
+async function loadAllInputs(args: Args): Promise<LoadedInput> {
+  const packageInputs = args.inputs.filter(isPackageInput);
+  const pathInputs = args.inputs.filter((i) => !isPackageInput(i));
+
+  if (packageInputs.length > 0 && pathInputs.length > 0) {
+    throw new Error(
+      `Cannot mix IG package identifiers with file/directory inputs in one run ` +
+        `(packages: ${packageInputs.join(", ")}; paths: ${pathInputs.join(", ")}). ` +
+        `A file input carries no dependency closure to resolve base chains against. Run them separately, into separate -o directories.`
+    );
+  }
+
+  if (packageInputs.length === 0) {
+    const docs: FhirSchemaDocument[] = [];
+    for (const input of pathInputs) docs.push(...(await loadDocsFromPath(input)));
+    return { docs: dedupeByUrl(docs), source: undefined, terminology: undefined, primitiveRegex: undefined };
+  }
+
+  const docs: FhirSchemaDocument[] = [];
+  const sources: SchemaSource[] = [];
+  const terminologies: TerminologySource[] = [];
+  const primitiveRegex: Record<string, string> = {};
+
+  for (const input of packageInputs) {
+    const loaded = await loadFromPackage(input, args);
+    docs.push(...loaded.docs);
+    if (loaded.source) sources.push(loaded.source);
+    if (loaded.terminology) terminologies.push(loaded.terminology);
+
+    // First package wins, matching compositeSchemaSource's rule. A conflict
+    // means two inputs disagree about a FHIR primitive's own grammar, which
+    // in practice means they are different FHIR versions — worth saying out
+    // loud, since one of the two sets of schemas then carries the other
+    // version's patterns.
+    for (const [type, pattern] of Object.entries(loaded.primitiveRegex ?? {})) {
+      const existing = primitiveRegex[type];
+      if (existing === undefined) {
+        primitiveRegex[type] = pattern;
+      } else if (existing !== pattern) {
+        console.warn(
+          `Inputs disagree about the regex for FHIR primitive "${type}" — keeping the first. ` +
+            `This usually means the inputs target different FHIR versions, which one batch cannot represent faithfully.`
+        );
+      }
+    }
+  }
+
+  return {
+    docs: dedupeByUrl(docs),
+    source: compositeSchemaSource(sources),
+    terminology: compositeTerminologySource(terminologies),
+    primitiveRegex,
+  };
+}
+
+/**
+ * Drops a document already contributed by an earlier input. Reachable when
+ * the same package is named twice, or when two named packages both ship a
+ * profile at the same canonical. emit/ would otherwise throw on the duplicate
+ * url — this is the friendlier answer for what is nearly always a typo, and
+ * it is never quiet.
+ */
+function dedupeByUrl(docs: FhirSchemaDocument[]): FhirSchemaDocument[] {
+  const byUrl = new Map<string, FhirSchemaDocument>();
+  for (const doc of docs) {
+    if (byUrl.has(doc.url)) {
+      console.warn(`Skipping duplicate document ${doc.name} (${doc.url}) — already contributed by an earlier input.`);
+      continue;
+    }
+    byUrl.set(doc.url, doc);
+  }
+  return [...byUrl.values()];
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const { docs, source, terminology, primitiveRegex } = isPackageInput(args.input)
-    ? await loadFromPackage(args.input, args)
-    : { docs: await loadDocsFromPath(args.input), source: undefined, terminology: undefined, primitiveRegex: undefined };
+  const { docs, source, terminology, primitiveRegex } = await loadAllInputs(args);
 
   console.log(`Loaded ${docs.length} FHIR Schema document(s).`);
 
   const { filesWritten, warningCount, failures } = await generatePackage(docs, {
     outDir: args.outDir,
     verbose: args.verbose,
+    force: args.force,
     source,
     terminology,
     primitiveRegex,
