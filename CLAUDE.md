@@ -100,8 +100,19 @@ Read the comment before "fixing" any of these:
   grammar is broader than WHATWG URL. (`@solarahealth/fhir-r4` ships this bug.)
 - **Requiredness comes from the PARENT's `required` array**, never an element's
   own — its own array lists its *children*. Conflating the two is defect 6.
-- **FHIRPath invariants are emitted as `/* TODO(invariant …) */` comments**, not
-  evaluated. Evaluating needs fhirpath.js at runtime.
+- **One FHIRPath shape is translated; everything else stays a
+  `/* TODO(invariant …) */` comment.** `emit/invariants.ts` enforces
+  `A.exists() or B.exists() [or …]` and nothing else — 40% of the emitted
+  marker population, picked by counting rather than by what looked easy.
+  General evaluation needs fhirpath.js at runtime, which every generated
+  file would then depend on. Three rules there are load-bearing: an
+  invariant is enforced only when **every** operand resolves (one
+  unresolvable operand abandons the whole rule — no partial enforcement,
+  same reasoning as "never a partial enum"); **`severity: "warning"` is
+  never enforced**, since FHIR means those as advice; and a `value.exists()`
+  operand is a **choice group**, resolving to its flattened `value[x]`
+  variants — reading it as a plain key would reject every conformant
+  instance in existence.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
 - **Primitive regexes are read from the package, never hardcoded, and only
@@ -213,8 +224,13 @@ upstream) stands. What's actually left:
   decision rather than an oversight: `rules: "closed"`, `ordered`/`openAtEnd`,
   a slice member's own narrower schema, and discriminator types that never
   occur in our data (`exists`/`type`/`profile`/`position`).
-- **FHIRPath invariants** — emitted as `/* TODO(invariant …) */` comments,
-  never evaluated (would need `fhirpath.js` at runtime).
+- **FHIRPath invariants beyond the `exists()`-or shape** — still comments,
+  and deliberately so (#41). The translated subset is enforced at runtime with
+  no new dependency; the rest would need `fhirpath.js`. The next shapes worth
+  measuring, if anyone wants them, are `A.empty() or B.empty()`,
+  `(A.exists() and B.exists()).not()`, and `field.matches('…')` — the last is
+  35 distinct rules across R4 + US Core but contributes **zero** markers to
+  US Core's output, so count before building.
 
 A generalization sweep (six structurally diverse IGs beyond the original
 r4.core/us.core pair — R5 core, SDC, SMART App Launch, genomics-reporting,
