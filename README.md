@@ -139,7 +139,11 @@ output set together under `tsc --strict --noEmit`) against:
   versions side by side — and until recently it produced **nothing at all**:
   one dependency pinned to a version its registry never published aborted
   the whole run. A dependency that can't be fetched is now a warning naming
-  the package and what it cost, not a failed run.
+  the package and what it cost, not a failed run. A worked example of using
+  these three in an application — including what generated schemas do and
+  don't cover for a prior-auth pipeline, and why `davinci-dtr` warns about
+  `davinci-crd#current` — is in
+  [`docs/pa-fhir-poc-integration.md`](./docs/pa-fhir-poc-integration.md).
 
 Across all of these: zero crashes, zero compile failures, and no filename
 collisions (generated file count always matched files actually written to
