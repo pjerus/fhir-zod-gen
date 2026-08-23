@@ -12,5 +12,8 @@ dist/
 # Scratch dir for src/validation/examples.test.ts's generated-schema imports
 .tmp-validate-examples/
 
+# Session checkpoints — local working notes, deliberately not published
+docs/checkpoints/
+
 # Agent worktrees (share this .git; never track them)
 .claude/

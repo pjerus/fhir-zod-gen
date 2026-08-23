@@ -13,8 +13,10 @@ deliberate intermediate format; that decision is load-bearing.
 anything.** It is the contract: the verified defect table, the architecture, and
 the per-phase decisions with their evidence.
 
-Repo: `github.com/pjerus/fhir-zod-gen` (private). Work happens on branches with
-PRs, never directly on `main`.
+Repo: `github.com/pjerus/fhir-zod-gen` (**public** — it always has been;
+this line used to say "private" and that was wrong. Anything merged here,
+including a PR's diff, is world-readable and cannot be retracted by rewriting
+history). Work happens on branches with PRs, never directly on `main`.
 
 ## Commands
 
