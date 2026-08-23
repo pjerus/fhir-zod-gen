@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Generate Zod schemas (and TypeScript types) from FHIR Implementation Guides, via the FHIR Schema intermediate format.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pjerus/fhir-zod-gen.git"
+  },
+  "homepage": "https://github.com/pjerus/fhir-zod-gen#readme",
+  "bugs": {
+    "url": "https://github.com/pjerus/fhir-zod-gen/issues"
+  },
   "type": "module",
   "bin": {
     "fhir-zod-gen": "./dist/cli.js"
