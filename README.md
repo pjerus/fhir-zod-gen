@@ -77,6 +77,27 @@ const patient: Patient = result.data;
 Point it at a directory of FHIR Schema `.json` files to generate a whole IG
 at once — it writes one `.ts` file per profile plus a barrel `index.ts`.
 
+### Several IGs together
+
+Name them all in one run. They're generated as **one batch**: shared
+datatypes are reconciled across every input and emitted once, and a single
+`index.ts` exports everything.
+
+```bash
+fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 hl7.fhir.us.davinci-crd#2.0.1 -o ./generated
+```
+
+Running the tool twice into the same directory is **not** the same thing, and
+is refused: the second run would rewrite `index.ts` from its own results,
+leaving the first run's files on disk but absent from the barrel — so
+importing from the barrel would silently miss them. Give each package its own
+`-o` directory instead, or pass `--force` if you really mean it.
+
+Where two inputs disagree — the same canonical published by both — the
+**leftmost input wins**, so the result is predictable from the command you
+ran. Package identifiers and file paths can't be mixed in one run: a file
+input carries no dependency closure to resolve base chains against.
+
 ### IG packages
 
 Given a package identifier (`hl7.fhir.us.core#6.1.0`, or a bare id for the
@@ -288,13 +309,8 @@ Rough priority order — PRs and issues on any of these are very welcome:
    generated schemas into JSON Schema for tool-calling contexts (see below)
    doesn't lose required/enum information.
 
-Known rough edges, both filed:
+Known rough edges:
 
-- **Several IGs in one output directory silently overwrites the barrel**
-  ([#50](https://github.com/pjerus/fhir-zod-gen/issues/50)). The CLI takes one
-  input, and a second run into the same directory leaves the first run's files
-  on disk while replacing its `index.ts`. Until that's fixed: **one output
-  directory per package**.
 - **A `#current` dependency can't be resolved**
   ([#48](https://github.com/pjerus/fhir-zod-gen/issues/48)). `current` names an
   IG's CI build on build.fhir.org, which the release registry doesn't serve, so
