@@ -34,22 +34,52 @@
  *
  * ## `skipTerminology` (issue #9)
  *
- * The default path above is unchanged: one `installer.install(specString)`
- * call, which cascades through the installer's own dependency resolution and
- * downloads everything, then this module re-walks the now-on-disk
- * `package.json` files to index them. `install()` has no public option to
- * exclude specific dependencies from that cascade — so skipping a
- * terminology-only package's ~100s of MB for real (not just from the index)
- * means never calling `install()` on the primary at all when the flag is
- * set. Instead `installClosureSkippingTerminology` walks the closure itself
- * via closure.ts's registry-metadata-only walker (pruning terminology-only
- * dependencies out of the walk before they're ever enqueued) and downloads
- * each accepted, not-yet-cached package individually with
- * `downloadPackage()` — the one public API that materializes a single
- * package without cascading into its dependencies. The trade-off: this path
- * loses `install()`'s cross-process disk locking during concurrent installs
- * of the same package. Acceptable for a single-user CLI invocation; not
- * something the default (far more common) path takes on.
+ * `install()` has no public option to exclude specific dependencies from its
+ * cascade — so skipping a terminology-only package's ~100s of MB for real
+ * (not just from the index) means never calling `install()` on the primary
+ * at all when the flag is set. Instead `installClosureTolerantly` walks the
+ * closure itself via closure.ts's registry-metadata-only walker (pruning
+ * terminology-only dependencies out of the walk before they're ever
+ * enqueued) and downloads each accepted, not-yet-cached package individually
+ * with `downloadPackage()` — the one public API that materializes a single
+ * package without cascading into its dependencies.
+ *
+ * ## A broken dependency must not abort the whole run (issue #42)
+ *
+ * The common-case default path still starts with one
+ * `installer.install(specString)` call: it cascades through the installer's
+ * own dependency resolution and download, with its cross-process disk
+ * locking, and is what nearly every invocation hits. But `install()` is
+ * all-or-nothing — one dependency it cannot fetch (e.g. a terminology
+ * package pinned to a version the registry never published:
+ * `us.nlm.vsac@0.18.0` in `hl7.fhir.us.davinci-pas#2.2.1`, where every
+ * *other* one of its 13 dependencies downloads fine) aborts the entire
+ * install and produces zero output, the same way an unresolvable binding or
+ * type is never allowed to abort emission elsewhere in this codebase.
+ *
+ * So when `install()` throws, this module falls back to
+ * `installClosureTolerantly` — the same per-package walk+download shape
+ * `skipTerminology` already uses — with no exclusion filter. That function
+ * always visits the primary package first (breadth-first from a single
+ * root), so a failure on the primary itself still rethrows and remains a
+ * hard error; a failure on any other node is a loud warning naming the
+ * package and the underlying cause, and the walk continues. The trade-off,
+ * same one `skipTerminology` already accepts: this path loses `install()`'s
+ * cross-process disk locking. Acceptable for a single-user CLI invocation,
+ * and it only runs at all after the fast path has already failed.
+ *
+ * Registry choice was evaluated separately and is *not* part of this fix:
+ * `packages2.fhir.org` does serve `us.nlm.vsac@0.18.0`'s metadata (verified
+ * via `GET https://packages2.fhir.org/packages/us.nlm.vsac/`), but
+ * `fhir-package-installer@1.13.1`'s tarball URL is hardcoded to the
+ * npm-style `{registryUrl}/{id}/-/{id}-{version}.tgz` shape regardless of
+ * registry (its `isPrivateRegistry` branch and its `else` branch build the
+ * identical string — dead code, not an actual distinction), and packages2
+ * doesn't serve tarballs at that path (its real layout is
+ * `/web/{id}-{version}.tgz`, reached through a 302 from
+ * `/packages/{id}/{version}`, verified with `curl`). So no `registryUrl`
+ * value makes this specific download succeed — graceful degradation is the
+ * correct and complete fix, not a registry swap.
  */
 
 import { existsSync } from "node:fs";
@@ -111,32 +141,65 @@ export async function installPackageClosure(
   const primaryId = await installer.toPackageObject(specString);
 
   if (options.skipTerminology) {
-    return await installClosureSkippingTerminology(installer, primaryId, log, warn);
+    return await installClosureTolerantly(installer, primaryId, log, warn, isKnownTerminologyPackage);
   }
 
   log(`Installing ${specString} and its dependencies (cache: ${installer.getCachePath()}) ...`);
-  await installer.install(specString);
-
-  return await readClosureFromDisk(installer, primaryId, warn);
+  try {
+    await installer.install(specString);
+    return await readClosureFromDisk(installer, primaryId, warn);
+  } catch (error) {
+    // install()'s cascade is all-or-nothing, so any failure inside it —
+    // whether the primary or one of its dependencies — lands here. Retry
+    // package-by-package: installClosureTolerantly rethrows if the primary
+    // itself is what's actually broken, and otherwise degrades just the
+    // failing dependency. See this file's module comment (issue #42).
+    const message = error instanceof Error ? error.message : String(error);
+    warn(
+      `${specString}'s dependency install cascade failed (${message}); retrying package-by-package so a single ` +
+        `broken dependency doesn't abort the whole run.`
+    );
+    return await installClosureTolerantly(installer, primaryId, log, warn);
+  }
 }
 
-async function installClosureSkippingTerminology(
+async function installClosureTolerantly(
   installer: FhirPackageInstaller,
   primary: ClosureNode,
   log: (message: string) => void,
-  warn: (message: string) => void
+  warn: (message: string) => void,
+  excludeDependency?: (id: string) => boolean
 ): Promise<InstalledClosure> {
   log(
-    `Resolving ${formatPackageSpec(primary)}'s dependency closure (cache: ${installer.getCachePath()}), ` +
-      `skipping terminology-only dependencies (--skip-terminology) ...`
+    `Resolving ${formatPackageSpec(primary)}'s dependency closure (cache: ${installer.getCachePath()})` +
+      (excludeDependency ? ", skipping terminology-only dependencies (--skip-terminology)" : "") +
+      " ..."
   );
-  const nodes = await walkDependencyClosure(installer, primary, { excludeDependency: isKnownTerminologyPackage });
-  const allowed = new Set(nodes.map((n) => `${n.id}#${n.version}`));
+  const nodes = await walkDependencyClosure(installer, primary, { excludeDependency });
+  const allowed = new Set<string>();
 
   for (const node of nodes) {
-    if (await installer.isInstalled(node, { deep: false })) continue;
-    log(`Downloading ${formatPackageSpec(node)} ...`);
-    await installer.downloadPackage(node, { destination: installer.getCachePath(), extract: true });
+    const key = `${node.id}#${node.version}`;
+    // Matched by identity, not by position. walkDependencyClosure does return
+    // the primary first (it seeds the queue with it), but this is the line
+    // that decides whether a run aborts or degrades, and it shouldn't rest on
+    // another module's iteration order.
+    const isPrimary = node.id === primary.id && node.version === primary.version;
+    try {
+      if (!(await installer.isInstalled(node, { deep: false }))) {
+        log(`Downloading ${formatPackageSpec(node)} ...`);
+        await installer.downloadPackage(node, { destination: installer.getCachePath(), extract: true });
+      }
+      allowed.add(key);
+    } catch (error) {
+      if (isPrimary) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      warn(
+        `Skipping dependency ${key}: could not be downloaded (${message}). Required bindings and types that ` +
+          `depend on it degrade instead of failing the run — an unexpandable required binding falls back to ` +
+          `z.string(), an unresolvable base or type falls back to z.unknown() with a TODO marker.`
+      );
+    }
   }
 
   return await readClosureFromDisk(installer, primary, warn, allowed);
