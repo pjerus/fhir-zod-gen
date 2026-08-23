@@ -125,16 +125,24 @@ checking requires:
 - **Structural validation** (field presence, cardinality, nesting, fixed
   code lists on required-strength bindings) — implemented and tested.
 - **FHIRPath invariants** (cross-field business rules — e.g. "if X is
-  present, Y must also be present") — not evaluated yet. The generated
-  code marks where they exist so nothing is silently dropped, but doesn't
-  enforce them.
+  present, Y must also be present") — partially enforced. One shape,
+  "at least one of these fields is present", is translated to a runtime
+  check and covers the largest single group of them; everything else is
+  marked in the generated code so nothing is silently dropped, but not
+  enforced. Evaluating the rest means shipping a FHIRPath interpreter that
+  every generated file would depend on, which is a real cost to weigh
+  rather than an obvious win.
 - **Terminology-server-backed bindings** (checking a code against a live,
   possibly large value set rather than a small closed list) — out of
   scope for a generated static schema; this needs a real terminology
   service regardless of language.
 - **Slicing** (FHIR's mechanism for saying "this array has an item that
-  must look like A and another that must look like B") — not implemented;
-  Zod's discriminated unions are a promising fit, tracked as a roadmap item.
+  must look like A and another that must look like B") — implemented as a
+  count check per named slice. Zod's discriminated unions look like the
+  natural fit and turn out to be the wrong tool: real IGs leave slicing
+  *open*, so array members matching no slice are legal, and a closed union
+  would reject them. Slice cardinality is enforced; a slice member's own
+  narrower schema is not.
 
 The honest framing: this covers the same "does the shape match the spec"
 layer the Java validator's structural checks cover, in a form that's
@@ -143,7 +151,10 @@ reference validator does.
 
 ## Get involved
 
-The repository includes a working example (a simplified `Patient` profile,
-generated and tested end-to-end) and a roadmap of the next pieces —
-IG-package auto-fetching, FHIRPath invariant support, and slicing are the
-top three. Issues and PRs welcome.
+The repository generates whole IG packages end-to-end — US Core, R4/R5 core,
+the Da Vinci prior-authorization family and others — with the generated
+schemas gated against the conformance-tested example resources those
+packages ship. The README's
+[roadmap](../README.md#roadmap) lists what's next; the nearest pieces are
+more FHIRPath invariant shapes and optional `fhirpath.js` evaluation for the
+ones a hand-written translator can't reach. Issues and PRs welcome.
