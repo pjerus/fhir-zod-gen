@@ -533,3 +533,78 @@ describe("issue #40: a profile's narrowing is re-applied at its own use site", (
     expect(result.success).toBe(true);
   });
 });
+
+/**
+ * Issue #41. The translatable subset of FHIRPath invariants is enforced at
+ * runtime rather than only marked with a comment. These run against the
+ * generated schemas on disk, not against source text — the point is what the
+ * emitted file *does*.
+ *
+ * Half of these assert acceptance, deliberately. Enforcing a rule is the
+ * direction that can start rejecting conformant data, and the choice-group
+ * case (vs-3, whose `value` operand is `value[x]` and has no JSON key of its
+ * own) would reject every instance in existence if it were resolved as a
+ * plain key.
+ */
+describe("issue #41: translated invariants are enforced in generated output", () => {
+  async function loadSchema(fileName: string, exportName: string): Promise<{
+    safeParse: (d: unknown) => { success: boolean };
+  }> {
+    const mod = (await import(pathToFileURL(join(TMP_DIR, fileName)).href)) as Record<string, unknown>;
+    return mod[exportName] as { safeParse: (d: unknown) => { success: boolean } };
+  }
+
+  const bodyweight = {
+    status: "final",
+    category: [
+      { coding: [{ system: "http://terminology.hl7.org/CodeSystem/observation-category", code: "vital-signs" }] },
+    ],
+    code: { coding: [{ system: "http://loinc.org", code: "29463-7" }] },
+    subject: { reference: "Patient/example" },
+    effectiveDateTime: "2016-03-28",
+    valueQuantity: { value: 185, unit: "[lb_av]", system: "http://unitsofmeasure.org", code: "[lb_av]" },
+  };
+
+  it("rejects a referenceRange with neither low, high nor text (obs-3)", async () => {
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    expect(schema.safeParse({ ...bodyweight, referenceRange: [{}] }).success).toBe(false);
+  });
+
+  it("accepts a referenceRange carrying only text (obs-3 is satisfied by any one operand)", async () => {
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    expect(schema.safeParse({ ...bodyweight, referenceRange: [{ text: "50-100" }] }).success).toBe(true);
+  });
+
+  it("rejects a component with no value and no dataAbsentReason (vs-3)", async () => {
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    const component = [{ code: { coding: [{ system: "http://loinc.org", code: "8480-6" }] } }];
+    expect(schema.safeParse({ ...bodyweight, component }).success).toBe(false);
+  });
+
+  it("accepts a component whose value arrives through a choice variant (vs-3's `value` is value[x])", async () => {
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    const component = [
+      { code: { coding: [{ system: "http://loinc.org", code: "8480-6" }] }, valueQuantity: { value: 120 } },
+    ];
+    expect(schema.safeParse({ ...bodyweight, component }).success).toBe(true);
+  });
+
+  it("accepts a component with dataAbsentReason and no value at all (vs-3's other operand)", async () => {
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    const component = [
+      {
+        code: { coding: [{ system: "http://loinc.org", code: "8480-6" }] },
+        dataAbsentReason: { coding: [{ code: "unknown" }] },
+      },
+    ];
+    expect(schema.safeParse({ ...bodyweight, component }).success).toBe(true);
+  });
+
+  it("treats a present-but-empty array as not existing, the way FHIRPath exists() does", async () => {
+    // `interpretation: []` is not a value; only dataAbsentReason can satisfy
+    // vs-3 here, and it is absent.
+    const schema = await loadSchema("ObservationBodyweight.ts", "ObservationBodyweightSchema");
+    const component = [{ code: { coding: [{ system: "http://loinc.org", code: "8480-6" }] }, interpretation: [] }];
+    expect(schema.safeParse({ ...bodyweight, component }).success).toBe(false);
+  });
+});
