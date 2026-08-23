@@ -152,6 +152,13 @@ interface EmitContext {
   primitiveRegex?: Record<string, string>;
   /** Set when any element in this file emitted a slice check, so emitOneFile declares the matcher exactly once. */
   usesSliceMatcher: { value: boolean };
+  /**
+   * Named type -> the consensus required-field set its shared file actually
+   * enforces (post-#34-relaxation). Lets elementToZod tell, per use site,
+   * whether *this* occurrence's own requiredness states something stronger
+   * than the shared file does — see namedTypeSuperRefine (issue #40).
+   */
+  consensusRequired: Map<string, Set<string>>;
 }
 
 function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, indent: string): string {
@@ -181,6 +188,22 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     expr = ctx.isCyclicEdge(ctx.currentType, el.type)
       ? `z.lazy((): z.ZodTypeAny => ${typeIdent}Schema)`
       : `${typeIdent}Schema`;
+
+    // Issue #40: re-apply whatever requiredness THIS occurrence states that
+    // the shared file's consensus (issue #34) had to give up. `el.elements`
+    // is this specific use site's own expansion — see merge/resolve.ts's
+    // resolveOneElement, which merges the profile's own differential over
+    // the type's base structure with `ownEl.required` (the field's own
+    // stated requirement list) driving requiredness, so it already reflects
+    // exactly what this field's differential says, independent of what any
+    // other use site of the same type states.
+    if (el.elements) {
+      const consensus = ctx.consensusRequired.get(el.type) ?? new Set<string>();
+      const extraRequired = [...requiredFieldsOf(el.elements)].filter((f) => !consensus.has(f)).sort();
+      if (extraRequired.length > 0) {
+        expr += namedTypeSuperRefine(extraRequired, indent);
+      }
+    }
   } else if (el.binding?.strength === "required" && el.binding.valueSet && PRIMITIVE_TYPES.has(el.type)) {
     // Defect 2. ONLY strength:"required" reaches here — see this function's
     // caller comment and the design doc's conformance rule: extensible/
@@ -491,6 +514,59 @@ function superRefineChecks(groups: ChoiceGroup[], requiredSiblings: string[], ba
 }
 
 /**
+ * The `.superRefine()` re-applying one use site's own extra requiredness on
+ * a shared named-type reference (issue #40, the direct follow-up to #34).
+ *
+ * #34 made every reusable datatype's shared file hold the *consensus* of all
+ * its use sites — a field is required there only when every occurrence
+ * requires it — so a profile that narrows the datatype at its own use site
+ * (e.g. the vital-signs family's `valueQuantity.value`/`unit`/`system`/
+ * `code`) lost that requirement everywhere, including at the very field that
+ * states it. This closes that gap: `extraRequired` is whatever this specific
+ * occurrence's own required set states beyond the shared file's consensus
+ * (computed by the caller), and this emits a check for each.
+ *
+ * `.superRefine()` attached to the reference itself — not hoisted to the
+ * containing object, unlike the choice-group/primitive-extension-sibling
+ * checks above — keeps the constraint next to the field it governs and
+ * leaves the inferred type untouched: `superRefine` never changes a
+ * schema's Output type, so `z.infer` of the containing object is exactly
+ * what it was before this feature existed (verified: `QuantitySchema
+ * .superRefine(fn)` and even `...superRefine(fn).optional()` both still
+ * infer the same shape `QuantitySchema` itself does).
+ *
+ * Deliberately shallow: only this occurrence's own top-level fields are
+ * compared against the consensus, never narrowing nested inside one of
+ * *those* fields' own named-type references (a narrowed sub-field of a
+ * narrowed field). Nothing in this project's fixtures or target packages
+ * narrows more than one level deep, and going further raises a real design
+ * question — which consensus a nested reference's own extra requirements
+ * should compare against — with no evidence yet that it matters. If it ever
+ * does, it needs its own deliberate comparison rather than silently
+ * recursing here.
+ */
+function namedTypeSuperRefine(extraRequired: string[], baseIndent: string): string {
+  const inner = `${baseIndent}  `;
+  const checks = extraRequired
+    .map((field) => {
+      const key = JSON.stringify(field);
+      return [
+        `${inner}if (value[${key}] === undefined) {`,
+        `${inner}  ctx.addIssue({`,
+        `${inner}    code: "custom",`,
+        // A plain string literal, not a template — nothing is interpolated at
+        // runtime, and the generated file is meant to be read.
+        `${inner}    message: ${JSON.stringify(`${field} is required here, though the shared type does not require it at every use site`)},`,
+        `${inner}    path: [${key}],`,
+        `${inner}  });`,
+        `${inner}}`,
+      ].join("\n");
+    })
+    .join("\n");
+  return `.superRefine((value, ctx) => {\n${checks}\n${baseIndent}})`;
+}
+
+/**
  * Walks `elements` looking for cross-file references
  * (ResolvedElement.isNamedType), collecting the referenced type names into
  * `targets`. Recurses into inline BackboneElement structure (same file:
@@ -638,6 +714,21 @@ function candidateConsensus(expansions: Record<string, ResolvedElement>[]): Disc
     elements[name] = toRelax.includes(name) ? { ...el, required: false } : el;
   }
   return { elements, relaxed };
+}
+
+/**
+ * The consensus required-field set each shared datatype's file actually
+ * enforces, post-#34-relaxation — i.e. `requiredFieldsOf` of exactly the
+ * `elements` each type's own file will emit. This is what individual use
+ * sites compare their own requiredness against to find out whether they
+ * need to re-apply anything (issue #40).
+ */
+function buildConsensusRequired(registry: Map<string, DiscoveredType>): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const [typeName, discovered] of registry) {
+    result.set(typeName, requiredFieldsOf(discovered.elements));
+  }
+  return result;
 }
 
 /** type name -> the set of other type names it references directly. */
@@ -909,6 +1000,7 @@ function emitOneFile(
   meta: FileMeta,
   isCyclicEdge: (from: string, to: string) => boolean,
   resolveTypeIdentifier: (rawTypeName: string) => string,
+  consensusRequired: Map<string, Set<string>>,
   options: EmitOptions
 ): EmitResult {
   const imports = new Set<string>();
@@ -922,19 +1014,23 @@ function emitOneFile(
     resolveTypeIdentifier,
     usesSliceMatcher,
     primitiveRegex: options.primitiveRegex,
+    consensusRequired,
   };
   const constName = `${identifier}Schema`;
 
-  // Loud, not silent: the batch disagreed about this type and the shared
-  // file kept the permissive reading, so the narrowing a profile stated is
-  // not enforced anywhere. See candidateConsensus (issue #34).
+  // Loud, not silent: the batch disagreed about this type, so its shared
+  // file keeps the permissive reading. Not lost, though — issue #40 makes
+  // each use site that states the stricter requirement re-apply it itself,
+  // right on that field's own reference (see namedTypeSuperRefine). See
+  // candidateConsensus (issue #34) for why one shared file can't hold both.
   if (meta.relaxedRequired?.length) {
     ctx.warnings.push(
       `Shared datatype "${meta.rawName}" is required to be permissive about ` +
         `${meta.relaxedRequired.join(", ")}: at least one profile in this package requires ` +
         `${meta.relaxedRequired.length === 1 ? "that field" : "those fields"} where it uses ` +
-        `${meta.rawName}, but others do not, and one shared file cannot hold both. The stricter ` +
-        `reading is not enforced at its own use site either.`
+        `${meta.rawName}, but others do not, and one shared file cannot hold both. Each use site ` +
+        `that states the stricter requirement re-applies it at its own reference (see that field's ` +
+        `own \`.superRefine()\`) — this file only carries the shared, permissive baseline.`
     );
   }
 
@@ -996,12 +1092,14 @@ export function emitDocument(schema: ResolvedSchema, options: EmitOptions = {}):
   const registry = discoverNamedTypes([schema.elements]);
   const isCyclicEdge = buildCyclicEdgeChecker(registry);
   const { identifierFor, resolveTypeIdentifier } = buildIdentifierResolvers([schema], registry);
+  const consensusRequired = buildConsensusRequired(registry);
   return emitOneFile(
     identifierFor(schema.url),
     schema.elements,
     { rawName: schema.name, url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
     isCyclicEdge,
     resolveTypeIdentifier,
+    consensusRequired,
     options
   );
 }
@@ -1026,6 +1124,7 @@ export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}
   const registry = discoverNamedTypes(schemas.map((s) => s.elements));
   const isCyclicEdge = buildCyclicEdgeChecker(registry);
   const { identifierFor, resolveTypeIdentifier } = buildIdentifierResolvers(schemas, registry);
+  const consensusRequired = buildConsensusRequired(registry);
 
   const results: EmitResult[] = [];
   for (const schema of schemas) {
@@ -1036,6 +1135,7 @@ export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}
         { rawName: schema.name, url: schema.url, kind: schema.kind, base: schema.base, derivation: schema.derivation, isDatatype: false },
         isCyclicEdge,
         resolveTypeIdentifier,
+        consensusRequired,
         options
       )
     );
@@ -1048,6 +1148,7 @@ export function emitPackage(schemas: ResolvedSchema[], options: EmitOptions = {}
         { rawName: typeName, isDatatype: true, relaxedRequired: discovered.relaxed },
         isCyclicEdge,
         resolveTypeIdentifier,
+        consensusRequired,
         options
       )
     );
