@@ -288,6 +288,20 @@ Rough priority order — PRs and issues on any of these are very welcome:
    generated schemas into JSON Schema for tool-calling contexts (see below)
    doesn't lose required/enum information.
 
+Known rough edges, both filed:
+
+- **Several IGs in one output directory silently overwrites the barrel**
+  ([#50](https://github.com/pjerus/fhir-zod-gen/issues/50)). The CLI takes one
+  input, and a second run into the same directory leaves the first run's files
+  on disk while replacing its `index.ts`. Until that's fixed: **one output
+  directory per package**.
+- **A `#current` dependency can't be resolved**
+  ([#48](https://github.com/pjerus/fhir-zod-gen/issues/48)). `current` names an
+  IG's CI build on build.fhir.org, which the release registry doesn't serve, so
+  it 404s and degrades to a warning. Harmless where nothing actually resolves
+  through that dependency — which is the case for the one real occurrence we've
+  hit, `davinci-dtr` — but the warning doesn't yet say so.
+
 ## A note for AI agent builders
 
 If you're building agents or tool-calling integrations that read or write
