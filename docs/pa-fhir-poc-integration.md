@@ -85,6 +85,35 @@ Each output directory is self-contained: one file per resource profile, one
 per shared datatype (`CodeableConcept.ts`, `Reference.ts`, …), and a barrel
 `index.ts` re-exporting everything.
 
+### One output directory per package — this one will bite you
+
+The CLI takes a **single** input, so three packages means three runs. Give
+each its own directory:
+
+```bash
+fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 -o ./src/generated/dtr
+fhir-zod-gen hl7.fhir.us.davinci-crd#2.0.1 -o ./src/generated/crd
+fhir-zod-gen hl7.fhir.r4.core#4.0.1        -o ./src/generated/r4
+```
+
+**Do not point two runs at the same directory.** Verified behaviour: after
+generating DTR (45 files) and then CRD into the same directory, you get 60
+files and every DTR profile is still on disk — but `index.ts` has been
+**overwritten** and exports *none* of them. `grep -c DTR index.ts` returns 0.
+Anything importing from the barrel silently loses half of what it asked for,
+with no error at any stage.
+
+There is a second, subtler reason. A shared datatype file holds the consensus
+of the batch it was emitted with (see the README on how a profile's narrowing
+is reconciled), so `CodeableConcept.ts` from a DTR batch and from a CRD batch
+are not guaranteed to be the same file — the second run's copy would silently
+replace the first's. For these two packages they happen to be byte-identical,
+which is luck, not a guarantee.
+
+The cost of separate directories is duplicated datatype files across them.
+That's real but harmless: they're independent modules, and each package's
+profiles reference their own copies consistently.
+
 **`PlanDefinition` is not in CRD's output**, because CRD doesn't profile it.
 The POC projects a plain R4 `PlanDefinition`, so that schema comes from
 `hl7.fhir.r4.core#4.0.1` — which also supplies `Questionnaire`, `Library` and
@@ -201,12 +230,37 @@ cache"](https://github.com/FHIR/fhir-package-loader/releases) — i.e. the
 reference tooling also concluded that a missing `#current` dependency should
 degrade rather than abort. That is exactly what this tool does now.
 
-**What it costs you in practice:** CRD-sourced ValueSet bindings referenced
-from DTR can't expand, so those fields are `z.string()` instead of `z.enum`,
-and any type that would have resolved through CRD falls back to `z.unknown()`
-with a visible marker. The other 44 files are unaffected. If you need those
-bindings, generate `hl7.fhir.us.davinci-crd#2.0.1` (or `2.2.1`) explicitly
-alongside DTR — it's a published version and resolves normally.
+**What it costs you in practice: measurably nothing, for DTR.** That is worth
+stating precisely, because the obvious guess — "some bindings won't expand
+and some types fall back to `z.unknown()`" — is wrong here, and was checked
+rather than assumed:
+
+- **No file in DTR's 45 references a CRD canonical at all.** DTR names CRD as
+  a dependency but doesn't actually resolve anything through it.
+- The four binding warnings DTR emits are `urn:ietf:bcp:13` (mime types) and
+  `urn:iso:std:iso:4217` (ISO currencies), on `Attachment.contentType`,
+  `Signature.sigFormat`/`targetFormat` and `Money.currency`. Those code
+  systems have no enumerable content and fall back to `z.string()` in **every**
+  package — nothing to do with CRD.
+- The 11 `z.unknown()` markers are `Questionnaire.item` and its `value[x]` —
+  the recursive item structure. The identical markers appear in US Core's
+  `QuestionnaireResponse`, whose closure is complete.
+
+Two further facts, both verified: `davinci-crd` **2.0.1 and 2.2.1 sitting in
+the package cache does not satisfy the dependency**, because it is keyed
+`#current` and neither is; and generating `davinci-crd` separately does not
+change DTR's output, because DTR's resolution never reached for it.
+
+So there is no workaround to apply, because there is nothing to work around.
+If a future package genuinely needs a `#current` dependency's content, the
+fix is a version-pinning flag — tracked in
+[#48](https://github.com/pjerus/fhir-zod-gen/issues/48), which also records
+why fetching CI builds directly is the wrong answer for a codegen tool whose
+output gets committed.
+
+**TODO:** the warning is currently indistinguishable from one that costs you
+something. It should say that a `#current` dependency is unresolvable by
+construction rather than implying a transient failure — [#48](https://github.com/pjerus/fhir-zod-gen/issues/48).
 
 *Note: this behaviour is recent. Before the fix in issue #42, one unfetchable
 dependency aborted the entire run — `davinci-pas` produced zero files for
