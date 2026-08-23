@@ -115,6 +115,15 @@ Read the comment before "fixing" any of these:
   instance in existence.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
+- **A dependency package that can't be downloaded degrades too (#42)** — warn,
+  skip it, emit the package. Only a failure on the *primary* is fatal. The
+  installer's `install()` cascade is all-or-nothing, so `resolve/install.ts`
+  catches it and retries package-by-package. Don't "fix" this by pointing at
+  another registry: `fhir-package-installer@1.13.1`'s `getTarballUrl` returns
+  the identical npm-style URL in **both** branches of its `isPrivateRegistry`
+  check (character-for-character dead code), so no `registryUrl` reaches
+  packages2.fhir.org's `/packages/{id}/{version}` → 302 → `/web/…tgz` layout.
+  Verified, and it cost a detour — don't re-derive it.
 - **Primitive regexes are read from the package, never hardcoded, and only
   for types that carry real signal.** FHIR Schema drops them, so `resolve/`
   lifts them off the raw primitive-type StructureDefinitions and passes a
@@ -195,21 +204,27 @@ Read the comment before "fixing" any of these:
 
 ## Open gaps
 
-#3, #5, #6, #9, #10, #14, #23, #24, #27, #32, #34 and #37 are closed and
-merged. The only open issue is #26 — the converter-dependency risk record,
-whose decision (keep `@atomic-ehr/fhirschema`, don't vendor, don't file
-upstream) stands. What's actually left:
+#3, #5, #6, #9, #10, #14, #23, #24, #27, #32, #34, #37, #40, #41 and #42 are
+closed and merged. The only open issue is #26 — the converter-dependency risk
+record, whose decision (keep `@atomic-ehr/fhirschema`, don't vendor, don't
+file upstream) stands. It is a record, not a work item; it names its own
+triggers for reopening the question. What's actually left:
 
-- **A shared datatype holds the consensus of its use sites, not any one
-  profile's narrowing (#34).** `emit/`'s `candidateConsensus` keeps a field
-  required only where *every* use site requires it, and warns about what it
-  gave up. This is deliberately permissive: it can under-enforce a narrowing,
-  never falsely reject. It replaced first-expansion-wins, which handed 11
-  narrowed `valueQuantity` sites' requirements to 590 unnarrowed ones and made
-  the CLI's US Core output reject **18 of that package's 174** published
-  examples. **Re-applying each profile's narrowing at its own use site is the
-  real repair and is not done** — it needs somewhere to put per-site
-  constraints that doesn't exist yet.
+- **A shared datatype holds the consensus of its use sites; each use site
+  re-applies its own narrowing (#34, #40).** `emit/`'s `candidateConsensus`
+  keeps a field required in the shared file only where *every* use site
+  requires it — deliberately permissive, since it can under-enforce, never
+  falsely reject. It replaced first-expansion-wins, which handed 11 narrowed
+  `valueQuantity` sites' requirements to 590 unnarrowed ones and made US Core
+  output reject **18 of that package's 174** published examples. #40 then put
+  the narrowing back where it belongs: a named-type reference carries a
+  field-local `.superRefine()` for whatever requiredness *that occurrence*
+  states beyond the consensus (55 re-applied requirements in us.core, 35 in
+  r4.core). **It is deliberately shallow** — only the occurrence's own
+  top-level fields, never a narrowing nested inside one of those fields' own
+  references. Nothing in the target packages needs the nested case, and it
+  raises a real question about which consensus to compare against; don't
+  silently recurse if it ever comes up.
 - **Slice-match recovery is done (#32), and the tail is deliberate.** Across
   seven packages' generated output, unenforced slice cardinalities went
   **60 → 29** and emitted slice checks **359 → 390**. The remaining 29 are
