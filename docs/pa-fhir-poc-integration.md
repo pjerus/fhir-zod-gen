@@ -259,9 +259,15 @@ fix is a version-pinning flag — tracked in
 why fetching CI builds directly is the wrong answer for a codegen tool whose
 output gets committed.
 
-**TODO:** the warning is currently indistinguishable from one that costs you
-something. It should say that a `#current` dependency is unresolvable by
-construction rather than implying a transient failure — [#48](https://github.com/pjerus/fhir-zod-gen/issues/48).
+The warning now says which kind of failure this is. It reports the dependency
+before the download (marked `ci-build only` in the closure table), then
+explains that a `#current` version cannot be resolved — rather than implying a
+transient fetch failure — and that a cached copy of some other version won't
+satisfy it either. Fixed in [#48](https://github.com/pjerus/fhir-zod-gen/issues/48).
+
+If a future package genuinely needs a `#current` dependency's content, name a
+published version as an extra input; since [#50](https://github.com/pjerus/fhir-zod-gen/issues/50)
+both are generated as one batch and resolve against each other.
 
 *Note: this behaviour is recent. Before the fix in issue #42, one unfetchable
 dependency aborted the entire run — `davinci-pas` produced zero files for

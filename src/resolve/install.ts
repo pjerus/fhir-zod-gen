@@ -85,7 +85,12 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { FhirPackageInstaller } from "fhir-package-installer";
-import { isKnownTerminologyPackage, walkDependencyClosure, type ClosureNode } from "./closure.js";
+import {
+  isKnownTerminologyPackage,
+  unpublishableVersionKind,
+  walkDependencyClosure,
+  type ClosureNode,
+} from "./closure.js";
 import { readPackageIndex, readPackageManifest } from "./package-index.js";
 import type { LoadedPackage } from "./package-schema-source.js";
 import { formatPackageSpec, type PackageSpec } from "./package-spec.js";
@@ -154,13 +159,70 @@ export async function installPackageClosure(
     // package-by-package: installClosureTolerantly rethrows if the primary
     // itself is what's actually broken, and otherwise degrades just the
     // failing dependency. See this file's module comment (issue #42).
+    // Deliberately not phrased as a broken dependency: the cascade is
+    // all-or-nothing, so it also fails for a dependency that is unresolvable
+    // by construction (a `#current` ci-build — issue #48), where "failed" and
+    // a raw 404 overstate the problem. The per-dependency warnings below are
+    // the authority on what was actually lost; this one only explains why the
+    // slower path is being taken. Verbose keeps the underlying cause, which
+    // is worth having when the failure is a genuine one.
     const message = error instanceof Error ? error.message : String(error);
+    log(`Cascade install of ${specString} did not complete: ${message}`);
     warn(
-      `${specString}'s dependency install cascade failed (${message}); retrying package-by-package so a single ` +
-        `broken dependency doesn't abort the whole run.`
+      `Installing ${specString}'s dependencies one at a time — the cascade cannot complete when any single ` +
+        `dependency is unfetchable. Anything actually skipped is reported below; run with -v for the underlying cause.`
     );
     return await installClosureTolerantly(installer, primaryId, log, warn);
   }
+}
+
+/** What every skipped-dependency warning ends with — the same degrade rules, however the fetch failed. */
+const DEGRADE_CONSEQUENCE =
+  `Anything that resolves through it degrades rather than failing the run: an unexpandable required binding ` +
+  `falls back to z.string(), an unresolvable base or type to z.unknown() with a TODO marker. If nothing in the ` +
+  `output resolves through it, this costs you nothing.`;
+
+/**
+ * The warning for a dependency that couldn't be fetched (issue #48).
+ *
+ * A `#current` dependency is unresolvable *by construction*, not by accident:
+ * it names a build.fhir.org CI build, and the release registry serves
+ * published versions only. The generic "could not be downloaded (404)"
+ * message reads like a transient failure, which is misleading enough that it
+ * sent someone hunting for a cost that wasn't there — hence this issue. Say
+ * which kind of failure it is, and what (if anything) to do about it.
+ *
+ * The remedy offered is deliberately the one that exists: name a published
+ * version as an extra input, which since issue #50 puts both packages in one
+ * batch resolving against one another. Not "we'll fetch the CI build for
+ * you" — see closure.ts's unpublishableVersionKind for why that trade is a
+ * bad one for a codegen tool whose output is committed.
+ */
+function describeSkippedDependency(node: ClosureNode, error: unknown): string {
+  const key = `${node.id}#${node.version}`;
+  const kind = unpublishableVersionKind(node.version);
+
+  if (kind === "ci-build") {
+    return (
+      `Skipping dependency ${key}: "${node.version}" names a continuous-integration build on build.fhir.org, ` +
+        `and the package registry serves published versions only — so this cannot be resolved, and no amount of ` +
+        `cached copies of other versions will satisfy it. ${DEGRADE_CONSEQUENCE} ` +
+        `To resolve against it anyway, name a published version of ${node.id} as an additional input — ` +
+        `both packages are then generated as one batch.`
+    );
+  }
+
+  if (kind === "local-dev") {
+    return (
+      `Skipping dependency ${key}: "dev" names a local development build in the package cache, and there isn't ` +
+        `one there. No registry publishes it. ${DEGRADE_CONSEQUENCE} ` +
+        `To resolve against it, build ${node.id} locally into the cache, or name a published version of it as an ` +
+        `additional input.`
+    );
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return `Skipping dependency ${key}: could not be downloaded (${message}). ${DEGRADE_CONSEQUENCE}`;
 }
 
 async function installClosureTolerantly(
@@ -193,12 +255,7 @@ async function installClosureTolerantly(
       allowed.add(key);
     } catch (error) {
       if (isPrimary) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      warn(
-        `Skipping dependency ${key}: could not be downloaded (${message}). Required bindings and types that ` +
-          `depend on it degrade instead of failing the run — an unexpandable required binding falls back to ` +
-          `z.string(), an unresolvable base or type falls back to z.unknown() with a TODO marker.`
-      );
+      warn(describeSkippedDependency(node, error));
     }
   }
 
