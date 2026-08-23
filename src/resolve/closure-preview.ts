@@ -26,7 +26,13 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { FhirPackageInstaller } from "fhir-package-installer";
 import type { InstallOptions } from "./install.js";
-import { isKnownTerminologyPackage, walkDependencyClosure, type ClosureNode } from "./closure.js";
+import {
+  isKnownTerminologyPackage,
+  unpublishableVersionKind,
+  walkDependencyClosure,
+  type ClosureNode,
+  type UnpublishableVersion,
+} from "./closure.js";
 import { formatPackageSpec, type PackageSpec } from "./package-spec.js";
 
 export interface ClosureEntry extends ClosureNode {
@@ -36,6 +42,15 @@ export interface ClosureEntry extends ClosureNode {
   approxSizeBytes?: number;
   /** See closure.ts's isKnownTerminologyPackage — a --skip-terminology candidate. */
   terminologyOnly: boolean;
+  /**
+   * Set when the declared version is one no registry publishes — a
+   * build.fhir.org CI build ("current", "current$branch") or a local "dev"
+   * build. Such an entry will never be downloaded however long you wait, so
+   * reporting it alongside packages that genuinely are about to be fetched
+   * would overstate both the download and the wait. Issue #48; see
+   * closure.ts's unpublishableVersionKind.
+   */
+  unpublishableVersion?: UnpublishableVersion;
 }
 
 export interface ClosurePreview {
@@ -78,7 +93,13 @@ export async function previewPackageClosure(spec: PackageSpec, options: InstallO
         approxSizeBytes = undefined;
       }
     }
-    packages.push({ ...node, cached, approxSizeBytes, terminologyOnly: isKnownTerminologyPackage(node.id) });
+    packages.push({
+      ...node,
+      cached,
+      approxSizeBytes,
+      terminologyOnly: isKnownTerminologyPackage(node.id),
+      unpublishableVersion: unpublishableVersionKind(node.version),
+    });
   }
 
   const primary = packages[0];

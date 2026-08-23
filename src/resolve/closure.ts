@@ -71,6 +71,40 @@ export interface ClosureNode {
  * --skip-terminology's savings estimate as "not classified"), not silently
  * misclassified the other way.
  */
+/**
+ * A dependency version the release registry can never serve (issue #48).
+ *
+ * FHIR package versions are usually semver, but IG tooling also uses a small
+ * set of non-semver strings. Definitions per HL7's own reference loader,
+ * `fhir-package-loader`:
+ *
+ *   - `current`             — the current master/main build, from build.fhir.org
+ *   - `current$branchname`  — the current build on a branch, likewise
+ *   - `dev`                 — the local development build in your FHIR cache
+ *   - `latest`              — the most recent *published* version, from the
+ *                             registry. Resolvable; not our problem, and
+ *                             deliberately absent below.
+ *
+ * `hl7.fhir.us.davinci-dtr#2.0.1` really does declare
+ * `"hl7.fhir.us.davinci-crd": "current"` in its published package.json, so
+ * this is a shipped-IG reality rather than an authoring mistake we can wait
+ * out. HL7's IG-authoring guidance calls the term ambiguous itself:
+ * "current refers to either the last milestone or the ci-build".
+ *
+ * Recognizing these exists purely so the failure can be *described*
+ * accurately. We do not fetch from build.fhir.org: its content moves whenever
+ * someone merges, and this tool's output is committed and diffed, so pinning
+ * generated schemas to a CI build would trade a determinism guarantee for a
+ * dependency nothing has yet been shown to need.
+ */
+export type UnpublishableVersion = "ci-build" | "local-dev";
+
+export function unpublishableVersionKind(version: string): UnpublishableVersion | undefined {
+  if (version === "current" || version.startsWith("current$")) return "ci-build";
+  if (version === "dev") return "local-dev";
+  return undefined;
+}
+
 const KNOWN_TERMINOLOGY_PACKAGE_IDS = /^(us\.nlm\.vsac|us\.cdc\.phinvads|hl7\.terminology(\..+)?)$/;
 
 export function isKnownTerminologyPackage(id: string): boolean {

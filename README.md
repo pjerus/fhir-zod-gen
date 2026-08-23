@@ -309,14 +309,32 @@ Rough priority order — PRs and issues on any of these are very welcome:
    generated schemas into JSON Schema for tool-calling contexts (see below)
    doesn't lose required/enum information.
 
-Known rough edges:
+### A dependency on a version no registry publishes
 
-- **A `#current` dependency can't be resolved**
-  ([#48](https://github.com/pjerus/fhir-zod-gen/issues/48)). `current` names an
-  IG's CI build on build.fhir.org, which the release registry doesn't serve, so
-  it 404s and degrades to a warning. Harmless where nothing actually resolves
-  through that dependency — which is the case for the one real occurrence we've
-  hit, `davinci-dtr` — but the warning doesn't yet say so.
+Some published IGs declare a dependency on a non-semver version:
+`hl7.fhir.us.davinci-dtr#2.0.1` really does say
+`"hl7.fhir.us.davinci-crd": "current"`. Per HL7's own reference loader,
+`current` (and `current$branch`) names a **build.fhir.org CI build**, and
+`dev` names a **local build in your cache** — neither is something the release
+registry can serve.
+
+Such a dependency is reported before the download, marked `ci-build only` in
+the closure table, then skipped with a warning explaining that it cannot be
+resolved rather than that it failed to download. Everything else generates
+normally. It costs you nothing unless something in the output actually
+resolves through it — for `davinci-dtr`, nothing does.
+
+If something does, name a published version as an extra input and the two are
+generated as one batch:
+
+```bash
+fhir-zod-gen hl7.fhir.us.davinci-dtr#2.0.1 hl7.fhir.us.davinci-crd#2.0.1 -o ./generated
+```
+
+We deliberately don't fetch CI builds. Their content changes whenever someone
+merges to the IG's main branch, and generated schemas here are meant to be
+committed and diffed — pinning them to a moving target would trade away the
+determinism guarantee.
 
 ## A note for AI agent builders
 
