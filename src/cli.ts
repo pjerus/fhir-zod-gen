@@ -186,7 +186,18 @@ function formatBytes(bytes: number): string {
 function formatClosureTable(preview: ClosurePreview, skipTerminology: boolean): string {
   const header = ["Package", "Version", "Status", "Size"];
   const rows = preview.packages.map((p) => {
-    const status = p.cached ? "cached" : skipTerminology && p.terminologyOnly ? "skipped" : "not cached";
+    // A ci-build/dev version is never "not cached, will download" — no
+    // registry publishes it, so the row would otherwise promise a fetch that
+    // cannot happen (issue #48).
+    const status = p.cached
+      ? "cached"
+      : p.unpublishableVersion === "ci-build"
+        ? "ci-build only"
+        : p.unpublishableVersion === "local-dev"
+          ? "local build only"
+          : skipTerminology && p.terminologyOnly
+            ? "skipped"
+            : "not cached";
     const size = p.approxSizeBytes !== undefined ? formatBytes(p.approxSizeBytes) : p.cached ? "" : "unknown";
     const label = p.terminologyOnly ? `${p.id} (terminology)` : p.id;
     return [label, p.version, status, size];
@@ -203,7 +214,10 @@ function summarizeClosure(preview: ClosurePreview, skipTerminology: boolean): st
   const cachedBytes = cached.reduce((sum, p) => sum + (p.approxSizeBytes ?? 0), 0);
   const terminologyOnly = preview.packages.filter((p) => p.terminologyOnly);
   const skipped = skipTerminology ? terminologyOnly.filter((p) => !p.cached) : [];
-  const toDownload = preview.packages.filter((p) => !p.cached && !skipped.includes(p));
+  const unpublishable = preview.packages.filter((p) => !p.cached && p.unpublishableVersion);
+  const toDownload = preview.packages.filter(
+    (p) => !p.cached && !skipped.includes(p) && !p.unpublishableVersion
+  );
 
   lines.push(
     `${preview.packages.length} package(s) in the closure, ${cached.length} already cached (${formatBytes(cachedBytes)} on disk).`
@@ -212,6 +226,16 @@ function summarizeClosure(preview: ClosurePreview, skipTerminology: boolean): st
   if (toDownload.length > 0) {
     lines.push(
       `${toDownload.length} package(s) not yet cached and will be downloaded — the registry doesn't expose size without downloading, so their size isn't shown above.`
+    );
+  }
+
+  if (unpublishable.length > 0) {
+    lines.push(
+      `${unpublishable.length} declared dependenc${unpublishable.length === 1 ? "y names a version" : "ies name versions"} ` +
+        `no registry publishes (${unpublishable.map((p) => `${p.id}#${p.version}`).join(", ")}) — ` +
+        `a build.fhir.org CI build or a local dev build. ${unpublishable.length === 1 ? "It" : "They"} cannot be ` +
+        `downloaded, and will be skipped with a warning; that costs you nothing unless something in the output ` +
+        `resolves through ${unpublishable.length === 1 ? "it" : "them"}.`
     );
   }
 

@@ -115,6 +115,14 @@ Read the comment before "fixing" any of these:
   instance in existence.
 - **Unresolvable types degrade to `z.unknown()` with a visible TODO marker**, not
   a dangling `XSchema` reference. A loud gap beats a silent one.
+- **A version no registry can publish is described, not retried (#48).**
+  `current`/`current$branch` name a build.fhir.org CI build and `dev` a local
+  one (definitions per HL7's `fhir-package-loader`); `latest` is *not* one of
+  these — the registry serves it. `unpublishableVersionKind` exists so the
+  warning can say "unresolvable by construction" instead of "download
+  failed", which is the misreading that cost a session. We deliberately do
+  not fetch CI builds: their content moves on every merge, and output here is
+  committed and diffed.
 - **A dependency package that can't be downloaded degrades too (#42)** — warn,
   skip it, emit the package. Only a failure on the *primary* is fatal. The
   installer's `install()` cascade is all-or-nothing, so `resolve/install.ts`
