@@ -473,3 +473,63 @@ describe("issue #34: a profile's narrowing does not contaminate the shared datat
     );
   });
 });
+
+/**
+ * Issue #40, the direct follow-up to #34 above. #34 stopped requiredness
+ * enforcement at the shared Quantity.ts file's own consensus, so
+ * `bodyweight`'s own stated requirement — value/unit/system/code all
+ * required on its `valueQuantity` — was dropped everywhere, including at
+ * the very field that states it. This asserts the requirement survives
+ * there while every other Quantity use site in the very same batch (blood
+ * pressure's components, bodyweight's own referenceRange.low/high) stays
+ * exactly as permissive as #34 left it — same generated files as the #34
+ * tests above, not a fresh emission.
+ */
+describe("issue #40: a profile's narrowing is re-applied at its own use site", () => {
+  async function loadBodyweightSchema(): Promise<{
+    safeParse: (d: unknown) => { success: boolean };
+  }> {
+    const path = join(TMP_DIR, "ObservationBodyweight.ts");
+    const mod = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    return mod.ObservationBodyweightSchema as { safeParse: (d: unknown) => { success: boolean } };
+  }
+
+  const base = {
+    status: "final",
+    category: [
+      { coding: [{ system: "http://terminology.hl7.org/CodeSystem/observation-category", code: "vital-signs" }] },
+    ],
+    code: { coding: [{ system: "http://loinc.org", code: "29463-7" }] },
+    subject: { reference: "Patient/example" },
+    effectiveDateTime: "2016-03-28",
+  };
+
+  it("accepts a fully-populated narrowed valueQuantity", async () => {
+    const schema = await loadBodyweightSchema();
+    const result = schema.safeParse({
+      ...base,
+      valueQuantity: { value: 185, unit: "[lb_av]", system: "http://unitsofmeasure.org", code: "[lb_av]" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a valueQuantity missing a field the profile requires, that the shared Quantity type itself accepts", async () => {
+    const schema = await loadBodyweightSchema();
+    // The bare shared QuantitySchema accepts `{ value }` alone (see the #34
+    // tests above) — bodyweight's own differential additionally requires
+    // unit/system/code, and issue #40 is exactly this surviving at its own
+    // field instead of being silently dropped with the rest of the batch.
+    const result = schema.safeParse({ ...base, valueQuantity: { value: 185 } });
+    expect(result.success).toBe(false);
+  });
+
+  it("still accepts a bare Quantity at a use site that does not narrow it (bodyweight's own referenceRange.low)", async () => {
+    const schema = await loadBodyweightSchema();
+    const result = schema.safeParse({
+      ...base,
+      valueQuantity: { value: 185, unit: "[lb_av]", system: "http://unitsofmeasure.org", code: "[lb_av]" },
+      referenceRange: [{ low: { value: 50 } }],
+    });
+    expect(result.success).toBe(true);
+  });
+});
