@@ -286,6 +286,16 @@ measured at single-digit milliseconds, and the gap it closes cost a real bug.
   hardcode a FHIR base field because "it can't be derived from the data" —
   check one rung further up the chain first. That's issue #23.
 
+- **One run, one batch, one barrel.** The CLI takes several inputs and emits
+  them together, so shared datatypes are reconciled across every package
+  named (`compositeSchemaSource`/`compositeTerminologySource`, first-hit-wins
+  on the leftmost input). A second run into a directory that already holds
+  another batch's files is refused, because the barrel is rewritten from one
+  run's results and the earlier run's files would stay on disk while dropping
+  out of `index.ts` — silently, until #50. `GENERATED_FILE_MARKER` is how
+  generate.ts tells our own output from a hand-written file sharing the
+  directory; don't reach for a manifest file to answer that.
+
 - **Cross-file imports mean generated files must be compiled as a set, never
   individually.** A complex-typed field imports that type's own generated
   schema from another file in the same output directory; per-file
