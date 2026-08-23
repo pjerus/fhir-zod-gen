@@ -76,6 +76,12 @@ import type { ResolvedElement, ResolvedSchema } from "../merge/index.js";
 import { FHIR_PRIMITIVE_TYPES } from "../fhir-schema-types.js";
 import { expandValueSet, type TerminologySource } from "../terminology/index.js";
 import { SLICE_MATCHER_SOURCE, sliceChecksFor, sliceSuperRefine } from "./slicing.js";
+import {
+  INVARIANT_HELPER_SOURCE,
+  invariantSuperRefine,
+  translateInvariant,
+  type TranslatedInvariant,
+} from "./invariants.js";
 import { primitiveRegexSuffix } from "./primitive-regex.js";
 
 const PRIMITIVE_TYPES = new Set<string>(FHIR_PRIMITIVE_TYPES);
@@ -132,6 +138,24 @@ function primitiveToZod(type: string): string {
   }
 }
 
+/**
+ * Every invariant on one element that invariants.ts can enforce, in the
+ * converter's own key order — which is stable for a given input, so output
+ * stays byte-identical across runs. Anything it declines keeps its comment
+ * marker (see elementToZod's constraint loop). Issue #41.
+ */
+function translateInvariants(
+  constraint: Record<string, { expression?: string; human?: string; severity?: string }>,
+  children: Record<string, ResolvedElement>
+): TranslatedInvariant[] {
+  const translated: TranslatedInvariant[] = [];
+  for (const [id, detail] of Object.entries(constraint)) {
+    const one = translateInvariant(id, detail, { children });
+    if (one) translated.push(one);
+  }
+  return translated;
+}
+
 /** Escapes a constraint's human text so it can't prematurely close the `/* ... *\/` comment it's embedded in. */
 function escapeForBlockComment(text: string): string {
   return text.replace(/\*\//g, "*-/");
@@ -152,6 +176,8 @@ interface EmitContext {
   primitiveRegex?: Record<string, string>;
   /** Set when any element in this file emitted a slice check, so emitOneFile declares the matcher exactly once. */
   usesSliceMatcher: { value: boolean };
+  /** Set when any element in this file emitted a translated invariant, so emitOneFile declares that helper exactly once. */
+  usesInvariantHelper: { value: boolean };
   /**
    * Named type -> the consensus required-field set its shared file actually
    * enforces (post-#34-relaxation). Lets elementToZod tell, per use site,
@@ -258,6 +284,15 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
     expr = `z.unknown() /* TODO: "${el.type}" has no resolved structure in the configured SchemaSource — falling back to z.unknown() */`;
   }
 
+  // Before the array wrap, so a repeating element's invariants run per
+  // member: a FHIR constraint on `Observation.referenceRange` is a rule about
+  // each reference range, not about the array. Issue #41.
+  const translatedInvariants = el.constraint && el.elements ? translateInvariants(el.constraint, el.elements) : [];
+  if (translatedInvariants.length > 0) {
+    ctx.usesInvariantHelper.value = true;
+    expr += invariantSuperRefine(translatedInvariants, indent);
+  }
+
   if (el.array) {
     expr = `z.array(${expr})`;
     if (typeof el.min === "number" && el.min > 0) {
@@ -287,10 +322,16 @@ function elementToZod(name: string, el: ResolvedElement, ctx: EmitContext, inden
   }
 
   if (el.constraint) {
+    const enforced = new Set(translatedInvariants.map((i) => i.id));
     for (const [id, detail] of Object.entries(el.constraint)) {
-      // We don't evaluate FHIRPath here — that needs fhirpath.js at
-      // runtime. Emit a comment marker so consumers know an invariant
-      // exists and can wire it up with .refine() themselves.
+      // Everything invariants.ts couldn't translate with certainty keeps the
+      // comment marker it always had: we don't evaluate FHIRPath here, since
+      // that needs fhirpath.js at runtime, so consumers know the rule exists
+      // and can wire it up with .refine() themselves. The ones it *did*
+      // translate are enforced above and carry their id in the runtime
+      // message instead — a TODO next to a check that isn't a to-do would be
+      // a lie about what the file does.
+      if (enforced.has(id)) continue;
       expr += ` /* TODO(invariant ${id}): ${escapeForBlockComment(detail.human)} */`;
     }
   }
@@ -1005,6 +1046,7 @@ function emitOneFile(
 ): EmitResult {
   const imports = new Set<string>();
   const usesSliceMatcher = { value: false };
+  const usesInvariantHelper = { value: false };
   const ctx: EmitContext = {
     warnings: [],
     terminology: options.terminology,
@@ -1013,6 +1055,7 @@ function emitOneFile(
     isCyclicEdge,
     resolveTypeIdentifier,
     usesSliceMatcher,
+    usesInvariantHelper,
     primitiveRegex: options.primitiveRegex,
     consensusRequired,
   };
@@ -1064,8 +1107,9 @@ function emitOneFile(
   // dependency on ours (see this module's comment), so a generated file has
   // to stand on its own. Only in files that actually use it.
   const matcher = usesSliceMatcher.value ? `${SLICE_MATCHER_SOURCE}\n\n` : "";
+  const invariantHelper = usesInvariantHelper.value ? `${INVARIANT_HELPER_SOURCE}\n\n` : "";
 
-  const source = `${header}${matcher}export const ${constName} = ${body};\n\nexport type ${identifier} = z.infer<typeof ${constName}>;\n`;
+  const source = `${header}${matcher}${invariantHelper}export const ${constName} = ${body};\n\nexport type ${identifier} = z.infer<typeof ${constName}>;\n`;
 
   return {
     fileName: `${identifier}.ts`,
