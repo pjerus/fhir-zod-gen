@@ -1,7 +1,7 @@
 {
   "name": "fhir-zod-gen",
-  "version": "0.1.0",
-  "description": "Generate Zod schemas (and TypeScript types) from FHIR Implementation Guides, via the FHIR Schema intermediate format.",
+  "version": "0.1.1",
+  "description": "Validate FHIR against US Core, Da Vinci or any published Implementation Guide — generates Zod schemas that enforce profile constraints, not just base R4.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -33,7 +33,14 @@
     "typescript",
     "healthcare",
     "codegen",
+    "validation",
+    "fhir-profile",
+    "us-core",
+    "davinci",
     "implementation-guide",
+    "structuredefinition",
+    "fhir-schema",
+    "smart-on-fhir",
     "hl7"
   ],
   "dependencies": {

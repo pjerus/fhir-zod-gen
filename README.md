@@ -1,7 +1,28 @@
 # fhir-zod-gen
 
-Generate [Zod](https://zod.dev) schemas — runtime validators plus inferred TypeScript
-types, in one artifact — from FHIR Implementation Guides.
+Validate FHIR against **US Core, Da Vinci, or any published Implementation
+Guide** — not just base R4.
+
+```bash
+npx fhir-zod-gen hl7.fhir.us.core#6.1.0 -o ./src/fhir
+```
+
+Point it at an IG package and it generates [Zod](https://zod.dev) schemas that
+enforce *that IG's profile constraints* — narrowed cardinality, required
+bindings, slice counts, and the mechanically-translatable invariants. Each
+file is a runtime validator and an inferred TypeScript type in one artifact,
+written into your repo as readable source.
+
+**How this differs from the other FHIR + Zod packages.** They ship
+pre-generated schemas for the *base* specification. Those can tell you a
+resource isn't a valid `Patient`; they cannot tell you it isn't a valid
+**US Core** Patient, because base R4 doesn't require what US Core requires.
+This generates from the IG you actually have to conform to.
+
+The generated schemas accept **441 of 441** conformance examples published by
+the four IG packages they are tested against, with an empty known-failures
+list — the suite gates on it in both directions. See [Against real example
+resources](#against-real-example-resources).
 
 > Status: **early / seeking contributors.** IG packages resolve and generate
 > end-to-end, including profiles whose base is itself a profile (multi-level
