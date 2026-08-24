@@ -52,7 +52,21 @@ TypeScript/Zod equivalent.
 npm install -g fhir-zod-gen
 # or, without installing:
 npx fhir-zod-gen <input> -o ./generated
+# or as a build-time dependency, to regenerate in CI:
+npm install --save-dev fhir-zod-gen
 ```
+
+**Install Zod yourself.** The generator emits text and never imports Zod, so
+Zod is a peer dependency rather than one of ours — that keeps a second copy
+out of your tree and leaves the choice of major to you:
+
+```bash
+npm install zod
+```
+
+The generated output uses only APIs that behave identically in **Zod 3
+(`^3.25.0`) and Zod 4 (`^4.0.0`)**, and is tested against both. You should
+not have to pick a Zod major to use this tool.
 
 ## Usage
 

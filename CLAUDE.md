@@ -31,6 +31,36 @@ npx tsx scripts/build-fixtures.ts    # regenerate fixtures from real IG packages
 
 CI runs lint + build + test on Node 20.
 
+## It is published to npm
+
+`fhir-zod-gen` is on the public registry, and `npx fhir-zod-gen <pkg> -o <dir>`
+is how people are expected to reach it. Three things follow, none of them
+guessable from the source:
+
+- **`zod` is an optional `peerDependency`, never a dependency.** `src/` never
+  imports it — the only occurrence is `emit/emit.ts` writing the string
+  `import { z } from "zod";` into generated output. Making it a dependency
+  hands every CLI user a copy the generator never loads, and a `^3 || ^4`
+  range in *our* deps can resolve a **second** zod beside the consumer's,
+  which is the exact failure "Zod 3/4 agnostic" exists to prevent. It stays in
+  `devDependencies` because the suite executes generated schemas.
+- **`npm run build` uses `tsconfig.build.json`**, which excludes
+  `src/**/*.test.ts`. The root `tsconfig.json` still covers everything, for
+  editors and `npm test`. Building with the root config publishes 52 compiled
+  test files to the registry — that shipped once before it was caught.
+- **The bin path is written `dist/cli.js`, not `./dist/cli.js`.** npm
+  normalizes the latter and announces it as `"bin[…]" script name … was
+  invalid and removed`, which reads like the binary was dropped. It is not —
+  `@npmcli/package-json/lib/normalize.js` pushes that message and assigns the
+  normalized value on the next line. Writing the stored form keeps the warning
+  off every publish. Don't "fix" the warning by touching the bin any further.
+
+Releasing is a version bump plus 2FA: `npm publish --otp=<code>`.
+`prepublishOnly` runs lint + build + test first, since a stale `dist/` is the
+likeliest way this ships something wrong. **Enabling or changing 2FA revokes
+the CLI login token**, and npm reports the resulting unauthorized `PUT` as a
+`404`, not a `401` — re-run `npm login` rather than debugging the package.
+
 ## Architecture
 
 Four layers. **Only the outer two touch the outside world.**
